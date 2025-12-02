@@ -112,6 +112,21 @@ export async function getContractTypes(
   return api.get(`/api/source/${analysisId}/${address}/types`);
 }
 
+export async function getTypeDefinition(
+  analysisId: string,
+  address: string,
+  typeName: string
+): Promise<{
+  typeName: string;
+  kind: string;
+  sourceFile: string;
+  sourceType: "verified" | "decompiled";
+  code: string;
+  extracted: boolean;
+}> {
+  return api.get(`/api/source/${analysisId}/${address}/type/${encodeURIComponent(typeName)}`);
+}
+
 // ============================================
 // RAG Chat Endpoints
 // ============================================

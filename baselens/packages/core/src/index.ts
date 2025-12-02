@@ -62,7 +62,8 @@ export type EdgeKind =
   | "EXTENDS_CONTRACT"
   | "USES_LIBRARY"
   | "USES_TYPE_INTERFACE"
-  | "REFERENCES_ADDRESS"; // Hardcoded address found in source code
+  | "REFERENCES_ADDRESS"      // Hardcoded address found in source code
+  | "SOURCE_DECLARED_IMPL";   // Implementation declared in source patterns
 
 // ============================================
 // Node Types
@@ -365,6 +366,7 @@ export const EDGE_COLORS: Record<EdgeKind, string> = {
   USES_LIBRARY: "#14b8a6", // teal
   USES_TYPE_INTERFACE: "#a855f7", // violet
   REFERENCES_ADDRESS: "#64748b", // slate - for hardcoded address references
+  SOURCE_DECLARED_IMPL: "#fb923c", // orange-400 - for implementations found in source
 };
 
 export const NODE_COLORS = {

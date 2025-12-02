@@ -11,6 +11,7 @@ interface SourceCodeModalProps {
   onClose: () => void;
   analysisId: string;
   address: string;
+  filePath?: string; // If provided, only show this specific file
 }
 
 export default function SourceCodeModal({
@@ -18,6 +19,7 @@ export default function SourceCodeModal({
   onClose,
   analysisId,
   address,
+  filePath,
 }: SourceCodeModalProps) {
   const { toast } = useToast();
 
@@ -27,20 +29,25 @@ export default function SourceCodeModal({
     enabled: isOpen && !!address,
   });
 
+  // Filter files if a specific file path is provided
+  const displayFiles = filePath && sourceData?.files
+    ? sourceData.files.filter((f) => f.path === filePath)
+    : sourceData?.files;
+
   const handleCopy = async () => {
-    if (sourceData?.files?.[0]?.content) {
-      await copyToClipboard(sourceData.files[0].content);
+    if (displayFiles?.[0]?.content) {
+      await copyToClipboard(displayFiles[0].content);
       toast({ title: "Copied to clipboard", variant: "success" });
     }
   };
 
   const handleDownload = () => {
-    if (sourceData?.files?.[0]) {
-      const blob = new Blob([sourceData.files[0].content], { type: "text/plain" });
+    if (displayFiles?.[0]) {
+      const blob = new Blob([displayFiles[0].content], { type: "text/plain" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = sourceData.files[0].path;
+      a.download = displayFiles[0].path;
       a.click();
       URL.revokeObjectURL(url);
     }
@@ -56,18 +63,18 @@ export default function SourceCodeModal({
             <div className="flex items-center gap-3">
               <FileCode className="w-5 h-5 text-primary-400" />
               <Dialog.Title className="font-semibold text-surface-100">
-                Source Code
+                {filePath ? filePath.split("/").pop() : "Source Code"}
               </Dialog.Title>
-              {sourceData && (
+              {displayFiles?.[0] && (
                 <span
                   className={cn(
                     "badge flex items-center gap-1",
-                    sourceData.sourceType === "verified"
+                    displayFiles[0].sourceType === "verified"
                       ? "badge-success"
                       : "badge-warning"
                   )}
                 >
-                  {sourceData.sourceType === "verified" ? (
+                  {displayFiles[0].sourceType === "verified" ? (
                     <>
                       <CheckCircle className="w-3 h-3" />
                       Verified
@@ -85,7 +92,7 @@ export default function SourceCodeModal({
               <button
                 onClick={handleCopy}
                 className="btn btn-ghost btn-sm"
-                disabled={!sourceData?.files?.length}
+                disabled={!displayFiles?.length}
               >
                 <Copy className="w-4 h-4" />
                 Copy
@@ -93,7 +100,7 @@ export default function SourceCodeModal({
               <button
                 onClick={handleDownload}
                 className="btn btn-ghost btn-sm"
-                disabled={!sourceData?.files?.length}
+                disabled={!displayFiles?.length}
               >
                 <Download className="w-4 h-4" />
                 Download
@@ -116,29 +123,31 @@ export default function SourceCodeModal({
               <div className="h-full flex items-center justify-center text-surface-400">
                 Failed to load source code
               </div>
-            ) : sourceData?.files?.length ? (
+            ) : displayFiles?.length ? (
               <div className="h-full overflow-auto">
-                {sourceData.files.map((file, index) => (
+                {displayFiles.map((file, index) => (
                   <div key={index} className="border-b border-surface-800 last:border-0">
-                    {/* File Header */}
-                    <div className="sticky top-0 px-6 py-2 bg-surface-800/90 backdrop-blur-sm border-b border-surface-700">
-                      <div className="flex items-center gap-2">
-                        <FileCode className="w-4 h-4 text-surface-400" />
-                        <span className="text-sm font-mono text-surface-300">
-                          {file.path}
-                        </span>
-                        <span
-                          className={cn(
-                            "badge text-xs",
-                            file.sourceType === "verified"
-                              ? "badge-success"
-                              : "badge-warning"
-                          )}
-                        >
-                          {file.sourceType}
-                        </span>
+                    {/* File Header - only show if multiple files */}
+                    {displayFiles.length > 1 && (
+                      <div className="sticky top-0 px-6 py-2 bg-surface-800/90 backdrop-blur-sm border-b border-surface-700">
+                        <div className="flex items-center gap-2">
+                          <FileCode className="w-4 h-4 text-surface-400" />
+                          <span className="text-sm font-mono text-surface-300">
+                            {file.path}
+                          </span>
+                          <span
+                            className={cn(
+                              "badge text-xs",
+                              file.sourceType === "verified"
+                                ? "badge-success"
+                                : "badge-warning"
+                            )}
+                          >
+                            {file.sourceType}
+                          </span>
+                        </div>
                       </div>
-                    </div>
+                    )}
                     {/* Code */}
                     <pre className="p-6 overflow-x-auto">
                       <code className="text-sm font-mono text-surface-200 whitespace-pre">

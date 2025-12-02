@@ -1,6 +1,7 @@
 // ============================================
 // Base Analyzer - Main analysis logic
-// Queue-based exploration with no depth limit
+// Queue-based exploration with aggressive recursion
+// EVERY contract gets FULL analysis like root
 // ============================================
 
 import type { Address, Hex } from "viem";
@@ -25,37 +26,43 @@ import { decompileContract } from "./decompiler.js";
 const MAX_CONTRACTS_PER_ANALYSIS = 100;
 
 // Maximum number of hardcoded addresses to extract from a single source file
-const MAX_HARDCODED_ADDRESSES_PER_FILE = 20;
+const MAX_HARDCODED_ADDRESSES_PER_FILE = 50;
+
+// Maximum number of hardcoded addresses to enqueue per contract
+const MAX_HARDCODED_TO_ENQUEUE = 20;
 
 // ============================================
 // Types
 // ============================================
 
+export type QueueReason =
+  | "ROOT"
+  | "PROXY_IMPLEMENTATION"
+  | "CREATOR_CONTRACT"
+  | "FACTORY_CREATED"
+  | "RUNTIME_CALLEE"
+  | "HARDCODED_ADDRESS"
+  | "SOURCE_DECLARED_IMPL";
+
+export interface QueueItem {
+  address: string;
+  reason: QueueReason;
+  sourceAddress?: string;
+}
+
 export interface AnalysisContext {
   analysisId: string;
   network: Network;
   rootAddress: string;
-  maxDepth: number; // Kept for backwards compatibility but not strictly enforced
+  queue: QueueItem[];
   visited: Set<string>;
-  queue: AnalysisQueueItem[];
+  pending: Set<string>;
+  bytecodeCache: Map<string, string>;
   onProgress?: (progress: number, message: string) => void;
+  maxDepth: number;
 }
 
-export interface AnalysisQueueItem {
-  address: string;
-  reason: RecursionReason;
-  sourceAddress?: string; // The address that led us to enqueue this one
-}
-
-export type RecursionReason =
-  | "ROOT"
-  | "PROXY_IMPLEMENTATION"
-  | "FACTORY_CREATOR"
-  | "CREATED_CONTRACT"
-  | "RUNTIME_CALLEE"
-  | "HARDCODED_ADDRESS";
-
-export interface ContractInfo {
+export interface AnalyzedContract {
   address: string;
   kindOnChain: ContractKindOnChain;
   verified: boolean;
@@ -66,14 +73,12 @@ export interface ContractInfo {
   abiRaw?: string;
   sourceFiles?: { path: string; content: string; sourceType: "verified" | "decompiled" }[];
   creatorAddress?: string;
+  creatorIsContract?: boolean;
   creationTxHash?: string;
+  implementationAddress?: string;
+  runtimeCallees?: string[];
+  createdContracts?: string[];
   tags: ContractTags;
-  proxyInfo?: {
-    implementationAddress?: string;
-    adminAddress?: string;
-    beaconAddress?: string;
-  };
-  // Basescan metadata
   compilerVersion?: string;
   optimizationUsed?: string;
   runs?: string;
@@ -83,9 +88,100 @@ export interface ContractInfo {
   constructorArguments?: string;
   swarmSource?: string;
   decompileError?: string;
-  // Recursion tracking
-  recursionReason?: RecursionReason;
+  recursionReason?: QueueReason;
   recursionSource?: string;
+  // Track all discovered implementations (from various sources)
+  discoveredImplementations?: string[];
+}
+
+export interface AnalyzedSource {
+  files: {
+    path: string;
+    content: string;
+    sourceType: "verified" | "decompiled";
+  }[];
+  typeDefs: DetectedType[];
+  hardcodedAddresses: string[];
+  declaredImplementations: string[]; // Implementation addresses found in patterns
+}
+
+export interface DetectedType {
+  name: string;
+  kind: "INTERFACE" | "ABSTRACT_CONTRACT" | "CONTRACT_IMPL" | "LIBRARY";
+  instanciable: boolean;
+  isRootContractType: boolean;
+  parents: string[];
+  interfaces: string[];
+  libraries: string[];
+  sourcePath: string; // The source file path that declares this type
+}
+
+// ============================================
+// Queue Management
+// ============================================
+
+function enqueue(ctx: AnalysisContext, item: QueueItem): boolean {
+  const addr = item.address.toLowerCase();
+
+  if (ctx.visited.has(addr)) {
+    logger.debug(`[Analyzer] Skip enqueue ${addr.slice(0, 10)}... - already visited`);
+    return false;
+  }
+
+  if (ctx.pending.has(addr)) {
+    logger.debug(`[Analyzer] Skip enqueue ${addr.slice(0, 10)}... - already pending`);
+    return false;
+  }
+
+  const totalCount = ctx.visited.size + ctx.pending.size;
+  if (totalCount >= MAX_CONTRACTS_PER_ANALYSIS) {
+    logger.warn(`[Analyzer] Skip enqueue ${addr.slice(0, 10)}... - at capacity (${totalCount}/${MAX_CONTRACTS_PER_ANALYSIS})`);
+    return false;
+  }
+
+  ctx.queue.push({ ...item, address: addr });
+  ctx.pending.add(addr);
+
+  logger.info(`[Analyzer] ✅ ENQUEUED: ${addr} (${item.reason}) from ${item.sourceAddress?.slice(0, 10) || "root"}`);
+  return true;
+}
+
+async function isAddressContract(ctx: AnalysisContext, address: string): Promise<boolean> {
+  const addr = address.toLowerCase();
+
+  if (ctx.bytecodeCache.has(addr)) {
+    const cached = ctx.bytecodeCache.get(addr)!;
+    return cached !== "0x" && cached.length > 2;
+  }
+
+  try {
+    const bytecode = await rpc.getCode(ctx.network, addr as Address);
+    const code = bytecode || "0x";
+    ctx.bytecodeCache.set(addr, code);
+    return code !== "0x" && code.length > 2;
+  } catch (error) {
+    logger.warn(`[Analyzer] Failed to check if ${addr} is contract:`, error);
+    ctx.bytecodeCache.set(addr, "0x");
+    return false;
+  }
+}
+
+async function getBytecode(ctx: AnalysisContext, address: string): Promise<string> {
+  const addr = address.toLowerCase();
+
+  if (ctx.bytecodeCache.has(addr)) {
+    return ctx.bytecodeCache.get(addr)!;
+  }
+
+  try {
+    const bytecode = await rpc.getCode(ctx.network, addr as Address);
+    const code = bytecode || "0x";
+    ctx.bytecodeCache.set(addr, code);
+    return code;
+  } catch (error) {
+    logger.warn(`[Analyzer] Failed to get bytecode for ${addr}:`, error);
+    return "0x";
+  }
 }
 
 // ============================================
@@ -94,15 +190,9 @@ export interface ContractInfo {
 
 /**
  * Extract hardcoded Ethereum addresses from source code
- * Matches patterns like 0x followed by 40 hex characters
  */
 export function extractHardcodedAddresses(sourceCode: string): string[] {
-  logger.debug(`[Analyzer] Extracting hardcoded addresses from source (${sourceCode.length} chars)...`);
-
-  // Match addresses: 0x followed by exactly 40 hex chars
-  // Must be on word boundary to avoid matching parts of longer hex strings
   const addressPattern = /\b(0x[a-fA-F0-9]{40})\b/g;
-
   const addresses = new Set<string>();
   let match;
 
@@ -112,11 +202,11 @@ export function extractHardcodedAddresses(sourceCode: string): string[] {
     // Skip zero address and common sentinel values
     if (address === "0x0000000000000000000000000000000000000000") continue;
     if (address === "0xffffffffffffffffffffffffffffffffffffffff") continue;
-    if (address === "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee") continue; // Native token placeholder
+    if (address === "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee") continue;
+    if (address.match(/^0x0{38}0[1-9]$/)) continue;
 
     addresses.add(address);
 
-    // Safety limit
     if (addresses.size >= MAX_HARDCODED_ADDRESSES_PER_FILE) {
       logger.warn(`[Analyzer] Hit max hardcoded addresses limit (${MAX_HARDCODED_ADDRESSES_PER_FILE})`);
       break;
@@ -124,32 +214,73 @@ export function extractHardcodedAddresses(sourceCode: string): string[] {
   }
 
   const result = Array.from(addresses);
-  logger.info(`[Analyzer] Found ${result.length} hardcoded addresses in source`);
+  if (result.length > 0) {
+    logger.info(`[Analyzer] Found ${result.length} hardcoded addresses in source`);
+  }
+  return result;
+}
 
+/**
+ * Extract implementation addresses from source code patterns
+ * Looks for common proxy patterns that declare implementation addresses
+ */
+export function extractDeclaredImplementations(sourceCode: string): string[] {
+  const implementations = new Set<string>();
+
+  // Pattern 1: address implementation = 0x...
+  const implPattern1 = /(?:implementation|_implementation|impl|_impl)\s*=\s*(0x[a-fA-F0-9]{40})/gi;
+
+  // Pattern 2: IMPLEMENTATION_SLOT, implementation storage patterns
+  const implPattern2 = /(?:IMPLEMENTATION|Implementation).*?(0x[a-fA-F0-9]{40})/gi;
+
+  // Pattern 3: upgradeTo(0x...), upgradeToAndCall(0x...)
+  const implPattern3 = /upgradeTo(?:AndCall)?\s*\(\s*(0x[a-fA-F0-9]{40})/gi;
+
+  // Pattern 4: _setImplementation(0x...)
+  const implPattern4 = /_setImplementation\s*\(\s*(0x[a-fA-F0-9]{40})/gi;
+
+  // Pattern 5: Beacon pattern - beacon address
+  const beaconPattern = /(?:beacon|_beacon)\s*=\s*(0x[a-fA-F0-9]{40})/gi;
+
+  const patterns = [implPattern1, implPattern2, implPattern3, implPattern4, beaconPattern];
+
+  for (const pattern of patterns) {
+    let match;
+    while ((match = pattern.exec(sourceCode)) !== null) {
+      const addr = match[1].toLowerCase();
+      if (addr !== "0x0000000000000000000000000000000000000000") {
+        implementations.add(addr);
+      }
+    }
+  }
+
+  const result = Array.from(implementations);
+  if (result.length > 0) {
+    logger.info(`[Analyzer] Found ${result.length} declared implementation addresses in source patterns`);
+  }
   return result;
 }
 
 // ============================================
-// Phase 1: On-chain Analysis
+// Phase 1: On-chain Analysis (RPC + Basescan)
 // ============================================
 
-/**
- * Analyze a single contract on-chain
- */
-export async function analyzeContractOnChain(
+async function analyzeContractOnChain(
   address: string,
-  network: Network
-): Promise<ContractInfo> {
+  ctx: AnalysisContext
+): Promise<AnalyzedContract> {
   const normalizedAddress = address.toLowerCase() as Address;
 
-  logger.info(`[Analyzer] === Analyzing on-chain: ${normalizedAddress} ===`);
+  logger.info(`[Analyzer] ════════════════════════════════════════`);
+  logger.info(`[Analyzer] ON-CHAIN ANALYSIS: ${normalizedAddress}`);
+  logger.info(`[Analyzer] ════════════════════════════════════════`);
 
-  // Step 1: Get bytecode to determine if EOA or contract
-  logger.info(`[Analyzer] Step 1: Getting bytecode...`);
-  const bytecode = await rpc.getCode(network, normalizedAddress);
+  // Step 1: Get bytecode via RPC
+  logger.info(`[Analyzer] [1/5] Getting bytecode from RPC...`);
+  const bytecode = await getBytecode(ctx, normalizedAddress);
 
   if (!bytecode || bytecode === "0x") {
-    logger.info(`[Analyzer] ✅ ${normalizedAddress} is an EOA (no bytecode)`);
+    logger.info(`[Analyzer] ⚪ ${normalizedAddress} is an EOA (no bytecode)`);
     return {
       address: normalizedAddress,
       kindOnChain: "EOA",
@@ -159,43 +290,86 @@ export async function analyzeContractOnChain(
     };
   }
 
-  logger.info(`[Analyzer] ${normalizedAddress} is a CONTRACT (${bytecode.length} chars bytecode)`);
+  logger.info(`[Analyzer] ✅ CONTRACT detected (${bytecode.length} chars bytecode)`);
 
-  // Step 2: Detect proxy patterns
-  logger.info(`[Analyzer] Step 2: Detecting proxy patterns...`);
+  // Step 2: Detect proxy patterns via RPC (EIP-1967, EIP-1167)
+  logger.info(`[Analyzer] [2/5] Detecting proxy patterns via RPC...`);
   const [eip1967Info, minimalProxyInfo] = await Promise.all([
-    rpc.detectEip1967Proxy(network, normalizedAddress),
-    Promise.resolve(rpc.detectMinimalProxy(bytecode)),
+    rpc.detectEip1967Proxy(ctx.network, normalizedAddress),
+    Promise.resolve(rpc.detectMinimalProxy(bytecode as Hex)),
   ]);
 
-  // Determine contract kind
   let kindOnChain: ContractKindOnChain = "CONTRACT_SIMPLE";
   const tags: ContractTags = {};
-  let proxyInfo: ContractInfo["proxyInfo"];
+  let implementationAddress: string | undefined;
+  const discoveredImplementations: string[] = [];
 
   if (eip1967Info.isProxy) {
     kindOnChain = "PROXY";
     tags.hasEip1967ImplSlot = true;
-    tags.implementationAddress = eip1967Info.implementationAddress ?? undefined;
+    implementationAddress = eip1967Info.implementationAddress?.toLowerCase();
+    tags.implementationAddress = implementationAddress;
+    if (implementationAddress) {
+      discoveredImplementations.push(implementationAddress);
+    }
     if (eip1967Info.adminAddress) {
       tags.proxyAdmin = eip1967Info.adminAddress;
     }
-    proxyInfo = {
-      implementationAddress: eip1967Info.implementationAddress ?? undefined,
-      adminAddress: eip1967Info.adminAddress ?? undefined,
-      beaconAddress: eip1967Info.beaconAddress ?? undefined,
-    };
-    logger.info(`[Analyzer] ✅ Detected EIP-1967 PROXY -> impl: ${proxyInfo.implementationAddress}`);
+    logger.info(`[Analyzer] 🔗 EIP-1967 PROXY detected → impl: ${implementationAddress}`);
   } else if (minimalProxyInfo.isMinimalProxy) {
     kindOnChain = "PROXY";
     tags.isMinimalProxy = true;
-    tags.implementationAddress = minimalProxyInfo.implementationAddress ?? undefined;
-    proxyInfo = {
-      implementationAddress: minimalProxyInfo.implementationAddress ?? undefined,
-    };
-    logger.info(`[Analyzer] ✅ Detected EIP-1167 minimal PROXY -> impl: ${proxyInfo.implementationAddress}`);
+    implementationAddress = minimalProxyInfo.implementationAddress?.toLowerCase();
+    tags.implementationAddress = implementationAddress;
+    if (implementationAddress) {
+      discoveredImplementations.push(implementationAddress);
+    }
+    logger.info(`[Analyzer] 🔗 EIP-1167 minimal PROXY detected → impl: ${implementationAddress}`);
   } else {
-    logger.info(`[Analyzer] Contract is a simple CONTRACT (no proxy pattern)`);
+    logger.info(`[Analyzer] ⚪ Simple CONTRACT (no proxy pattern from RPC)`);
+  }
+
+  // Step 3: Get creator info from Basescan (ALWAYS for every contract!)
+  logger.info(`[Analyzer] [3/5] Getting creator info from Basescan...`);
+  const creatorInfo = await explorer.getContractCreatorAndCreationTx(ctx.network, normalizedAddress);
+
+  let creatorAddress: string | undefined;
+  let creatorIsContract = false;
+  let creationTxHash: string | undefined;
+
+  if (creatorInfo.creatorAddress) {
+    creatorAddress = creatorInfo.creatorAddress.toLowerCase();
+    creationTxHash = creatorInfo.creationTxHash;
+
+    // Check if creator is a contract (factory pattern)
+    creatorIsContract = await isAddressContract(ctx, creatorAddress);
+
+    logger.info(`[Analyzer] 📦 Creator: ${creatorAddress}`);
+    logger.info(`[Analyzer]    - Is contract (factory): ${creatorIsContract}`);
+    logger.info(`[Analyzer]    - Creation tx: ${creationTxHash}`);
+  } else {
+    logger.info(`[Analyzer] ⚠️ No creator info found from Basescan`);
+  }
+
+  // Step 4: Detect contracts created by this contract (factory forward)
+  logger.info(`[Analyzer] [4/5] Detecting created contracts (factory forward)...`);
+  const createdContracts = await detectCreatedContracts(normalizedAddress, ctx);
+  if (createdContracts.length > 0) {
+    tags.isFactory = true;
+    logger.info(`[Analyzer] 🏭 FACTORY detected - created ${createdContracts.length} contracts`);
+    for (const created of createdContracts.slice(0, 5)) {
+      logger.info(`[Analyzer]    - ${created}`);
+    }
+    if (createdContracts.length > 5) {
+      logger.info(`[Analyzer]    - ... and ${createdContracts.length - 5} more`);
+    }
+  }
+
+  // Step 5: Detect runtime callees
+  logger.info(`[Analyzer] [5/5] Detecting runtime callees...`);
+  const runtimeCallees = await detectRuntimeCallees(normalizedAddress, ctx);
+  if (runtimeCallees.length > 0) {
+    logger.info(`[Analyzer] 📞 Found ${runtimeCallees.length} runtime callees`);
   }
 
   return {
@@ -204,39 +378,77 @@ export async function analyzeContractOnChain(
     verified: false,
     sourceType: "none",
     bytecode,
+    creatorAddress,
+    creatorIsContract,
+    creationTxHash,
+    implementationAddress,
+    discoveredImplementations,
+    runtimeCallees,
+    createdContracts,
     tags,
-    proxyInfo,
   };
 }
 
-/**
- * Get contract creation info from Basescan (batch)
- */
-export async function getContractCreationInfo(
-  addresses: string[],
-  network: Network
-): Promise<Map<string, { creator: string; txHash: string }>> {
-  logger.info(`[Analyzer] Fetching creation info for ${addresses.length} contracts via Basescan...`);
-  return explorer.getContractCreation(network, addresses);
+async function detectCreatedContracts(address: string, ctx: AnalysisContext): Promise<string[]> {
+  try {
+    const internalTxs = await explorer.getInternalTransactions(ctx.network, address, {
+      page: 1,
+      offset: 100,
+    });
+
+    const created = new Set<string>();
+
+    for (const tx of internalTxs) {
+      if (
+        tx.from.toLowerCase() === address.toLowerCase() &&
+        tx.type === "create" &&
+        tx.contractAddress
+      ) {
+        created.add(tx.contractAddress.toLowerCase());
+      }
+    }
+
+    return Array.from(created);
+  } catch (error) {
+    logger.warn(`[Analyzer] Failed to detect created contracts:`, error);
+    return [];
+  }
+}
+
+async function detectRuntimeCallees(address: string, ctx: AnalysisContext): Promise<string[]> {
+  try {
+    const internalTxs = await explorer.getInternalTransactions(ctx.network, address, {
+      page: 1,
+      offset: 50,
+    });
+
+    const callees = new Set<string>();
+
+    for (const tx of internalTxs) {
+      if (tx.from.toLowerCase() === address.toLowerCase() && tx.to) {
+        const callee = tx.to.toLowerCase();
+        if (callee !== address.toLowerCase() && tx.type !== "create") {
+          callees.add(callee);
+        }
+      }
+    }
+
+    return Array.from(callees);
+  } catch (error) {
+    logger.warn(`[Analyzer] Failed to detect runtime callees:`, error);
+    return [];
+  }
 }
 
 // ============================================
 // Phase 2: Source Code Analysis
 // ============================================
 
-/**
- * Parse source files from Basescan's source code response
- */
-function parseSourceFiles(
-  sourceCodeRaw: string,
-  contractName: string
-): { path: string; content: string }[] {
+function parseSourceFiles(sourceCodeRaw: string, contractName: string): { path: string; content: string }[] {
   const sourceFiles: { path: string; content: string }[] = [];
 
-  // Check if source code is a JSON object (multi-file format)
   if (sourceCodeRaw.startsWith("{") || sourceCodeRaw.startsWith("{{")) {
     try {
-      // Handle double-braced format
       let sourceJson = sourceCodeRaw;
       if (sourceJson.startsWith("{{")) {
         sourceJson = sourceJson.slice(1, -1);
@@ -244,7 +456,6 @@ function parseSourceFiles(
 
       const parsed = JSON.parse(sourceJson);
 
-      // Check for "sources" key (Solidity standard JSON input format)
       if (parsed.sources) {
         for (const [path, fileData] of Object.entries(parsed.sources)) {
           const content = (fileData as { content: string }).content;
@@ -252,9 +463,7 @@ function parseSourceFiles(
             sourceFiles.push({ path, content });
           }
         }
-        logger.info(`[Analyzer] Parsed ${sourceFiles.length} source files (standard JSON format)`);
       } else {
-        // Direct file mapping
         for (const [path, content] of Object.entries(parsed)) {
           if (typeof content === "string") {
             sourceFiles.push({ path, content });
@@ -262,224 +471,239 @@ function parseSourceFiles(
             sourceFiles.push({ path, content: (content as { content: string }).content });
           }
         }
-        logger.info(`[Analyzer] Parsed ${sourceFiles.length} source files (direct mapping)`);
       }
     } catch (e) {
-      logger.warn(`[Analyzer] Failed to parse multi-file source, treating as single file:`, e);
       sourceFiles.push({
         path: `${contractName || "Contract"}.sol`,
         content: sourceCodeRaw,
       });
     }
   } else {
-    // Single file source code
     sourceFiles.push({
       path: `${contractName || "Contract"}.sol`,
       content: sourceCodeRaw,
     });
-    logger.info(`[Analyzer] Single source file: ${contractName || "Contract"}.sol (${sourceCodeRaw.length} chars)`);
   }
 
   return sourceFiles;
 }
 
-/**
- * Get and analyze source code for a contract
- * Uses the new getContractSourceInfo helper for full metadata
- */
-export async function analyzeContractSource(
-  contractInfo: ContractInfo,
-  network: Network
-): Promise<ContractInfo> {
-  const address = contractInfo.address;
+async function analyzeContractSource(
+  contract: AnalyzedContract,
+  ctx: AnalysisContext
+): Promise<AnalyzedSource> {
+  const { address } = contract;
+  const { network } = ctx;
 
-  logger.info(`[Analyzer] === Analyzing source: ${address} ===`);
+  logger.info(`[Analyzer] ════════════════════════════════════════`);
+  logger.info(`[Analyzer] SOURCE ANALYSIS: ${address}`);
+  logger.info(`[Analyzer] ════════════════════════════════════════`);
 
-  // Step 1: Try to get verified source from Basescan using full metadata API
-  logger.info(`[Analyzer] Step 1: Checking Basescan for verified source (full metadata)...`);
+  const result: AnalyzedSource = {
+    files: [],
+    typeDefs: [],
+    hardcodedAddresses: [],
+    declaredImplementations: [],
+  };
+
+  // Step 1: Try Basescan for verified source (FULL metadata)
+  logger.info(`[Analyzer] [1/3] Checking Basescan for verified source...`);
   const sourceInfo = await explorer.getContractSourceInfo(network, address);
 
   if (sourceInfo.hasSource && sourceInfo.sourceCodeRaw) {
-    logger.info(`[Analyzer] ✅ Found VERIFIED source: ${sourceInfo.contractName}`);
-    logger.info(`[Analyzer]   - Compiler: ${sourceInfo.compilerVersion}`);
-    logger.info(`[Analyzer]   - Optimization: ${sourceInfo.optimizationUsed} (${sourceInfo.runs} runs)`);
-    logger.info(`[Analyzer]   - Proxy flag: ${sourceInfo.proxyFlag}`);
+    logger.info(`[Analyzer] ✅ VERIFIED SOURCE found: ${sourceInfo.contractName}`);
+    logger.info(`[Analyzer]    - Compiler: ${sourceInfo.compilerVersion}`);
+    logger.info(`[Analyzer]    - Optimization: ${sourceInfo.optimizationUsed} (${sourceInfo.runs} runs)`);
+    logger.info(`[Analyzer]    - EVM Version: ${sourceInfo.evmVersion}`);
+    logger.info(`[Analyzer]    - Proxy flag: ${sourceInfo.proxyFlag}`);
+    if (sourceInfo.implementation) {
+      logger.info(`[Analyzer]    - Basescan implementation: ${sourceInfo.implementation}`);
+    }
 
-    // Parse source files
     const sourceFiles = parseSourceFiles(sourceInfo.sourceCodeRaw, sourceInfo.contractName || "Contract");
-    logger.info(`[Analyzer]   - ${sourceFiles.length} source files`);
+    logger.info(`[Analyzer]    - ${sourceFiles.length} source files`);
 
-    // Parse ABI if available
-    let abi: AbiItem[] | undefined;
+    // Update contract with all metadata
+    contract.verified = true;
+    contract.sourceType = "verified";
+    contract.name = sourceInfo.contractName;
+    contract.compilerVersion = sourceInfo.compilerVersion;
+    contract.optimizationUsed = sourceInfo.optimizationUsed;
+    contract.runs = sourceInfo.runs;
+    contract.evmVersion = sourceInfo.evmVersion;
+    contract.library = sourceInfo.library;
+    contract.licenseType = sourceInfo.licenseType;
+    contract.constructorArguments = sourceInfo.constructorArguments;
+    contract.swarmSource = sourceInfo.swarmSource;
+
+    // Store in tags too
+    contract.tags.compilerVersion = sourceInfo.compilerVersion;
+    contract.tags.optimizationUsed = sourceInfo.optimizationUsed;
+    contract.tags.runs = sourceInfo.runs;
+    contract.tags.evmVersion = sourceInfo.evmVersion;
+    contract.tags.swarmSource = sourceInfo.swarmSource;
+
+    // Parse ABI
     if (sourceInfo.abiRaw) {
       try {
-        abi = JSON.parse(sourceInfo.abiRaw);
-        logger.info(`[Analyzer]   - ${abi?.length || 0} ABI items`);
+        contract.abi = JSON.parse(sourceInfo.abiRaw);
+        contract.abiRaw = sourceInfo.abiRaw;
+        logger.info(`[Analyzer]    - ${contract.abi?.length || 0} ABI items`);
       } catch (e) {
         logger.warn(`[Analyzer] Failed to parse ABI: ${e}`);
       }
     }
 
-    contractInfo.verified = true;
-    contractInfo.sourceType = "verified";
-    contractInfo.name = sourceInfo.contractName;
-    contractInfo.abi = abi;
-    contractInfo.abiRaw = sourceInfo.abiRaw;
-    contractInfo.sourceFiles = sourceFiles.map((f) => ({
-      ...f,
-      sourceType: "verified" as const,
-    }));
-
-    // Store all metadata
-    contractInfo.compilerVersion = sourceInfo.compilerVersion;
-    contractInfo.optimizationUsed = sourceInfo.optimizationUsed;
-    contractInfo.runs = sourceInfo.runs;
-    contractInfo.evmVersion = sourceInfo.evmVersion;
-    contractInfo.library = sourceInfo.library;
-    contractInfo.licenseType = sourceInfo.licenseType;
-    contractInfo.constructorArguments = sourceInfo.constructorArguments;
-    contractInfo.swarmSource = sourceInfo.swarmSource;
-
-    // Update proxy info from Basescan if available
+    // IMPORTANT: Check if Basescan says this is a proxy with implementation
     if (sourceInfo.proxyFlag === "1" && sourceInfo.implementation) {
-      logger.info(`[Analyzer] Basescan indicates this is a proxy -> ${sourceInfo.implementation}`);
-      contractInfo.kindOnChain = "PROXY";
-      contractInfo.proxyInfo = contractInfo.proxyInfo || {};
-      contractInfo.proxyInfo.implementationAddress = sourceInfo.implementation;
-      contractInfo.tags.proxyFlag = "1";
-      contractInfo.tags.implementationAddress = sourceInfo.implementation;
+      const implAddr = sourceInfo.implementation.toLowerCase();
+      logger.info(`[Analyzer] 🔗 Basescan proxy flag detected → impl: ${implAddr}`);
+
+      contract.kindOnChain = "PROXY";
+      contract.implementationAddress = implAddr;
+      contract.tags.proxyFlag = "1";
+      contract.tags.implementationAddress = implAddr;
+
+      // Add to discovered implementations
+      if (!contract.discoveredImplementations) {
+        contract.discoveredImplementations = [];
+      }
+      if (!contract.discoveredImplementations.includes(implAddr)) {
+        contract.discoveredImplementations.push(implAddr);
+      }
     }
 
-    // Store metadata in tags
-    contractInfo.tags.compilerVersion = sourceInfo.compilerVersion;
-    contractInfo.tags.optimizationUsed = sourceInfo.optimizationUsed;
-    contractInfo.tags.runs = sourceInfo.runs;
-    contractInfo.tags.evmVersion = sourceInfo.evmVersion;
-    contractInfo.tags.swarmSource = sourceInfo.swarmSource;
+    result.files = sourceFiles.map((f) => ({ ...f, sourceType: "verified" as const }));
+    contract.sourceFiles = result.files;
 
   } else {
-    // Step 1.5: If this is a PROXY, try to get source from IMPLEMENTATION address
-    if (contractInfo.kindOnChain === "PROXY" && contractInfo.proxyInfo?.implementationAddress) {
-      const implAddress = contractInfo.proxyInfo.implementationAddress;
-      logger.info(`[Analyzer] Step 1.5: Proxy detected, trying implementation address: ${implAddress}`);
+    logger.info(`[Analyzer] ⚪ No verified source for ${address}`);
 
-      const implSourceInfo = await explorer.getContractSourceInfo(network, implAddress);
+    // Step 1.5: For proxies, try implementation source
+    if (contract.kindOnChain === "PROXY" && contract.implementationAddress) {
+      logger.info(`[Analyzer] [1.5/3] Proxy detected - trying implementation source: ${contract.implementationAddress}`);
+
+      const implSourceInfo = await explorer.getContractSourceInfo(network, contract.implementationAddress);
 
       if (implSourceInfo.hasSource && implSourceInfo.sourceCodeRaw) {
-        logger.info(`[Analyzer] ✅ Found VERIFIED source from IMPLEMENTATION: ${implSourceInfo.contractName}`);
-        logger.info(`[Analyzer]   - Compiler: ${implSourceInfo.compilerVersion}`);
+        logger.info(`[Analyzer] ✅ IMPLEMENTATION SOURCE found: ${implSourceInfo.contractName}`);
 
-        // Parse source files from implementation
         const sourceFiles = parseSourceFiles(implSourceInfo.sourceCodeRaw, implSourceInfo.contractName || "Implementation");
-        logger.info(`[Analyzer]   - ${sourceFiles.length} source files from implementation`);
 
-        // Parse ABI if available
-        let abi: AbiItem[] | undefined;
+        contract.verified = true;
+        contract.sourceType = "verified";
+        contract.name = implSourceInfo.contractName;
+        contract.compilerVersion = implSourceInfo.compilerVersion;
+        contract.optimizationUsed = implSourceInfo.optimizationUsed;
+        contract.tags.compilerVersion = implSourceInfo.compilerVersion;
+        contract.tags.optimizationUsed = implSourceInfo.optimizationUsed;
+
         if (implSourceInfo.abiRaw) {
           try {
-            abi = JSON.parse(implSourceInfo.abiRaw);
-            logger.info(`[Analyzer]   - ${abi?.length || 0} ABI items from implementation`);
+            contract.abi = JSON.parse(implSourceInfo.abiRaw);
+            contract.abiRaw = implSourceInfo.abiRaw;
           } catch (e) {
             logger.warn(`[Analyzer] Failed to parse implementation ABI: ${e}`);
           }
         }
 
-        // Use implementation's source but mark as proxy
-        contractInfo.verified = true; // Implementation is verified
-        contractInfo.sourceType = "verified";
-        contractInfo.name = implSourceInfo.contractName;
-        contractInfo.abi = abi;
-        contractInfo.abiRaw = implSourceInfo.abiRaw;
-        contractInfo.sourceFiles = sourceFiles.map((f) => ({
-          ...f,
-          sourceType: "verified" as const,
-        }));
-
-        // Store implementation metadata
-        contractInfo.compilerVersion = implSourceInfo.compilerVersion;
-        contractInfo.optimizationUsed = implSourceInfo.optimizationUsed;
-        contractInfo.runs = implSourceInfo.runs;
-        contractInfo.evmVersion = implSourceInfo.evmVersion;
-        contractInfo.tags.compilerVersion = implSourceInfo.compilerVersion;
-        contractInfo.tags.optimizationUsed = implSourceInfo.optimizationUsed;
-
-        return contractInfo;
-      } else {
-        logger.info(`[Analyzer] Implementation ${implAddress} also not verified, continuing...`);
+        result.files = sourceFiles.map((f) => ({ ...f, sourceType: "verified" as const }));
+        contract.sourceFiles = result.files;
       }
     }
 
-    // Step 2: No verified source - try to get ABI-only
-    logger.info(`[Analyzer] Step 2: No verified source, checking for ABI-only...`);
-    const abiResult = await explorer.getContractAbiOnly(network, address);
+    // Step 2: Try ABI-only
+    if (result.files.length === 0) {
+      logger.info(`[Analyzer] [2/3] Checking for ABI-only...`);
+      const abiResult = await explorer.getContractAbiOnly(network, address);
 
-    if (abiResult.hasAbi && abiResult.abiRaw) {
-      logger.info(`[Analyzer] ✅ Found ABI without verified source`);
-      try {
-        contractInfo.abi = JSON.parse(abiResult.abiRaw);
-        contractInfo.abiRaw = abiResult.abiRaw;
-        logger.info(`[Analyzer]   - ${contractInfo.abi?.length || 0} ABI items`);
-      } catch (e) {
-        logger.warn(`[Analyzer] Failed to parse ABI-only: ${e}`);
+      if (abiResult.hasAbi && abiResult.abiRaw) {
+        try {
+          contract.abi = JSON.parse(abiResult.abiRaw);
+          contract.abiRaw = abiResult.abiRaw;
+          logger.info(`[Analyzer] ✅ ABI-only found (${contract.abi?.length} items)`);
+        } catch (e) {
+          logger.warn(`[Analyzer] Failed to parse ABI-only: ${e}`);
+        }
       }
     }
 
-    // Step 3: Try Panoramix decompilation (only if no verified source)
-    logger.info(`[Analyzer] Step 3: Trying Panoramix decompilation...`);
-    logger.info(`[Analyzer] Bytecode available: ${contractInfo.bytecode ? "YES" : "NO"} (${contractInfo.bytecode?.length || 0} chars)`);
+    // Step 3: Panoramix decompilation
+    if (result.files.length === 0 && contract.bytecode && contract.bytecode !== "0x") {
+      logger.info(`[Analyzer] [3/3] Trying Panoramix decompilation...`);
 
-    const decompResult = await decompileContract(
-      address,
-      network,
-      contractInfo.bytecode
-    );
+      const decompResult = await decompileContract(address, network, contract.bytecode);
 
-    if (decompResult.success) {
-      logger.info(`[Analyzer] ✅ Panoramix decompilation SUCCESSFUL via ${decompResult.method}`);
-      logger.info(`[Analyzer]   - Output size: ${decompResult.decompiled.length} chars`);
+      if (decompResult.success) {
+        logger.info(`[Analyzer] ✅ DECOMPILED via ${decompResult.method} (${decompResult.decompiled.length} chars)`);
 
-      contractInfo.verified = false;
-      contractInfo.sourceType = "decompiled";
-      contractInfo.sourceFiles = [
-        {
+        contract.verified = false;
+        contract.sourceType = "decompiled";
+        result.files = [{
           path: "Decompiled.sol",
           content: decompResult.decompiled,
-          sourceType: "decompiled" as const,
-        },
-      ];
-    } else {
-      logger.warn(`[Analyzer] ❌ Panoramix decompilation FAILED: ${decompResult.error}`);
-      contractInfo.sourceType = "none";
-      contractInfo.decompileError = decompResult.error;
-      contractInfo.tags.decompileError = decompResult.error;
+          sourceType: "decompiled",
+        }];
+        contract.sourceFiles = result.files;
+      } else {
+        logger.warn(`[Analyzer] ❌ Panoramix FAILED: ${decompResult.error}`);
+        contract.sourceType = "none";
+        contract.decompileError = decompResult.error;
+        contract.tags.decompileError = decompResult.error;
+      }
     }
   }
 
-  return contractInfo;
+  // Parse all source files for types, hardcoded addresses, and implementations
+  for (const file of result.files) {
+    // Type definitions - pass the file path so we know which file declares each type
+    const types = parseSourceForTypes(file.content, contract.address, ctx.rootAddress, file.path);
+    result.typeDefs.push(...types);
+
+    // Hardcoded addresses
+    const addrs = extractHardcodedAddresses(file.content);
+    for (const addr of addrs) {
+      if (addr !== contract.address && !result.hardcodedAddresses.includes(addr)) {
+        result.hardcodedAddresses.push(addr);
+      }
+    }
+
+    // Declared implementations (from proxy patterns in source)
+    const impls = extractDeclaredImplementations(file.content);
+    for (const impl of impls) {
+      if (impl !== contract.address && !result.declaredImplementations.includes(impl)) {
+        result.declaredImplementations.push(impl);
+        logger.info(`[Analyzer] 🔗 Found declared implementation in source: ${impl}`);
+      }
+    }
+  }
+
+  // Deduplicate
+  result.hardcodedAddresses = [...new Set(result.hardcodedAddresses)];
+  result.declaredImplementations = [...new Set(result.declaredImplementations)];
+
+  logger.info(`[Analyzer] Source analysis complete:`);
+  logger.info(`[Analyzer]    - ${result.files.length} files`);
+  logger.info(`[Analyzer]    - ${result.typeDefs.length} type definitions`);
+  logger.info(`[Analyzer]    - ${result.hardcodedAddresses.length} hardcoded addresses`);
+  logger.info(`[Analyzer]    - ${result.declaredImplementations.length} declared implementations`);
+
+  return result;
 }
 
 // ============================================
 // Type Detection from Source Code
 // ============================================
 
-export interface DetectedType {
-  name: string;
-  kind: "INTERFACE" | "ABSTRACT_CONTRACT" | "CONTRACT_IMPL" | "LIBRARY";
-  instanciable: boolean;
-  parents: string[];
-  interfaces: string[];
-  libraries: string[];
-}
-
-/**
- * Parse Solidity source to detect type definitions
- */
-export function parseSourceForTypes(sourceCode: string): DetectedType[] {
-  logger.debug(`[Analyzer] Parsing source for type definitions (${sourceCode.length} chars)...`);
-
+export function parseSourceForTypes(
+  sourceCode: string,
+  contractAddress: string,
+  rootAddress: string,
+  sourcePath: string
+): DetectedType[] {
   const types: DetectedType[] = [];
+  const isRoot = contractAddress.toLowerCase() === rootAddress.toLowerCase();
 
-  // Regex patterns for different type definitions
   const patterns = [
     {
       regex: /interface\s+(\w+)(?:\s+is\s+([^{]+))?\s*\{/g,
@@ -528,9 +752,11 @@ export function parseSourceForTypes(sourceCode: string): DetectedType[] {
         name,
         kind,
         instanciable,
+        isRootContractType: isRoot && instanciable,
         parents,
         interfaces,
         libraries: [],
+        sourcePath,
       });
     }
   }
@@ -549,408 +775,236 @@ export function parseSourceForTypes(sourceCode: string): DetectedType[] {
     }
   }
 
-  logger.info(`[Analyzer] Parsed ${types.length} type definitions from source`);
-  for (const t of types) {
-    logger.debug(`[Analyzer]   - ${t.kind}: ${t.name} (parents: ${t.parents.length}, interfaces: ${t.interfaces.length})`);
-  }
-
   return types;
 }
 
 // ============================================
-// Runtime Callee Detection
+// Recursion - Enqueue Related Addresses
 // ============================================
 
-/**
- * Get contracts that this contract calls at runtime (via internal transactions)
- */
-export async function detectRuntimeCallees(
-  address: string,
-  network: Network
-): Promise<string[]> {
-  logger.info(`[Analyzer] Detecting runtime callees for ${address}...`);
+async function enqueueRelatedAddresses(
+  contract: AnalyzedContract,
+  sourceInfo: AnalyzedSource,
+  ctx: AnalysisContext
+): Promise<void> {
+  const addr = contract.address;
 
-  try {
-    const internalTxs = await explorer.getInternalTransactions(network, address, {
-      page: 1,
-      offset: 50, // Get recent internal txs
-    });
+  logger.info(`[Analyzer] ════════════════════════════════════════`);
+  logger.info(`[Analyzer] ENQUEUEING RELATED for ${addr}`);
+  logger.info(`[Analyzer] ════════════════════════════════════════`);
 
-    const callees = new Set<string>();
+  let enqueueCount = 0;
 
-    for (const tx of internalTxs) {
-      // Check if this contract called another contract
-      if (tx.from.toLowerCase() === address.toLowerCase() && tx.to) {
-        const callee = tx.to.toLowerCase();
-        if (callee !== address.toLowerCase()) {
-          callees.add(callee);
-        }
+  // 1) Proxy → Implementation (from RPC detection)
+  if (contract.implementationAddress) {
+    if (enqueue(ctx, {
+      address: contract.implementationAddress,
+      reason: "PROXY_IMPLEMENTATION",
+      sourceAddress: addr,
+    })) {
+      enqueueCount++;
+    }
+  }
+
+  // 2) All discovered implementations (from various sources)
+  for (const impl of contract.discoveredImplementations ?? []) {
+    if (impl !== contract.implementationAddress) {
+      if (enqueue(ctx, {
+        address: impl,
+        reason: "PROXY_IMPLEMENTATION",
+        sourceAddress: addr,
+      })) {
+        enqueueCount++;
       }
     }
-
-    const result = Array.from(callees);
-    logger.info(`[Analyzer] Found ${result.length} runtime callees`);
-
-    return result;
-  } catch (error) {
-    logger.warn(`[Analyzer] Failed to get runtime callees:`, error);
-    return [];
   }
-}
 
-// ============================================
-// Full Analysis Pipeline
-// ============================================
+  // 3) Declared implementations from source code patterns
+  for (const impl of sourceInfo.declaredImplementations) {
+    const isContract = await isAddressContract(ctx, impl);
+    if (isContract) {
+      if (enqueue(ctx, {
+        address: impl,
+        reason: "SOURCE_DECLARED_IMPL",
+        sourceAddress: addr,
+      })) {
+        enqueueCount++;
+      }
+    }
+  }
 
-/**
- * Run the full analysis pipeline
- * Uses queue-based exploration with no strict depth limit
- */
-export async function runAnalysis(ctx: AnalysisContext): Promise<void> {
-  const { analysisId, network, rootAddress, onProgress } = ctx;
+  // 4) Creator contract (backward factory link)
+  if (contract.creatorAddress && contract.creatorIsContract) {
+    if (enqueue(ctx, {
+      address: contract.creatorAddress,
+      reason: "CREATOR_CONTRACT",
+      sourceAddress: addr,
+    })) {
+      enqueueCount++;
+    }
+  }
 
-  logger.info(`[Analyzer] ========================================`);
-  logger.info(`[Analyzer] STARTING ANALYSIS`);
-  logger.info(`[Analyzer] Analysis ID: ${analysisId}`);
-  logger.info(`[Analyzer] Root Address: ${rootAddress}`);
-  logger.info(`[Analyzer] Network: ${network}`);
-  logger.info(`[Analyzer] Max Contracts: ${MAX_CONTRACTS_PER_ANALYSIS}`);
-  logger.info(`[Analyzer] ========================================`);
+  // 5) Contracts created by this contract (forward factory)
+  for (const created of contract.createdContracts ?? []) {
+    if (enqueue(ctx, {
+      address: created,
+      reason: "FACTORY_CREATED",
+      sourceAddress: addr,
+    })) {
+      enqueueCount++;
+    }
+  }
 
-  onProgress?.(10, "Starting analysis...");
+  // 6) Runtime callees (CALL/DELEGATECALL/STATICCALL)
+  for (const callee of contract.runtimeCallees ?? []) {
+    if (enqueue(ctx, {
+      address: callee,
+      reason: "RUNTIME_CALLEE",
+      sourceAddress: addr,
+    })) {
+      enqueueCount++;
+    }
+  }
 
-  // Initialize queue with root address
-  ctx.queue = [{ address: rootAddress.toLowerCase(), reason: "ROOT" }];
-  ctx.visited = new Set();
+  // 7) Hardcoded addresses (only if they are contracts)
+  let hardcodedEnqueued = 0;
+  for (const hardcoded of sourceInfo.hardcodedAddresses) {
+    if (hardcodedEnqueued >= MAX_HARDCODED_TO_ENQUEUE) {
+      logger.warn(`[Analyzer] Hit max hardcoded enqueue limit (${MAX_HARDCODED_TO_ENQUEUE})`);
+      break;
+    }
 
-  const allContracts: ContractInfo[] = [];
-  const addressRelations: Map<string, { source: string; reason: RecursionReason }[]> = new Map();
-
-  // ============================================
-  // Phase 1: On-chain exploration (queue-based)
-  // ============================================
-
-  logger.info(`[Analyzer] ========================================`);
-  logger.info(`[Analyzer] PHASE 1: ON-CHAIN EXPLORATION`);
-  logger.info(`[Analyzer] ========================================`);
-
-  onProgress?.(15, "Phase 1: On-chain exploration...");
-
-  let explorationCount = 0;
-
-  while (ctx.queue.length > 0 && allContracts.length < MAX_CONTRACTS_PER_ANALYSIS) {
-    const { address, reason, sourceAddress } = ctx.queue.shift()!;
-
-    if (ctx.visited.has(address)) {
-      logger.debug(`[Analyzer] Skipping already visited: ${address}`);
+    if (ctx.visited.has(hardcoded) || ctx.pending.has(hardcoded)) {
       continue;
     }
 
-    ctx.visited.add(address);
-    explorationCount++;
-
-    // Track the relation
-    if (sourceAddress) {
-      const relations = addressRelations.get(address) || [];
-      relations.push({ source: sourceAddress, reason });
-      addressRelations.set(address, relations);
-    }
-
-    logger.info(`[Analyzer] --- Exploring #${explorationCount}: ${address} (${reason}) ---`);
-
-    try {
-      const contractInfo = await analyzeContractOnChain(address, network);
-      contractInfo.recursionReason = reason;
-      contractInfo.recursionSource = sourceAddress;
-
-      allContracts.push(contractInfo);
-
-      // Enqueue proxy implementation
-      if (contractInfo.proxyInfo?.implementationAddress) {
-        const implAddress = contractInfo.proxyInfo.implementationAddress.toLowerCase();
-        if (!ctx.visited.has(implAddress)) {
-          logger.info(`[Analyzer] Queueing proxy implementation: ${implAddress}`);
-          ctx.queue.push({
-            address: implAddress,
-            reason: "PROXY_IMPLEMENTATION",
-            sourceAddress: address,
-          });
-        }
-      }
-
-    } catch (error) {
-      logger.error(`[Analyzer] ❌ Failed to analyze ${address}:`, error);
-    }
-  }
-
-  if (allContracts.length >= MAX_CONTRACTS_PER_ANALYSIS) {
-    logger.warn(`[Analyzer] Hit max contracts limit (${MAX_CONTRACTS_PER_ANALYSIS}), stopping exploration`);
-  }
-
-  logger.info(`[Analyzer] Phase 1 complete: explored ${allContracts.length} addresses`);
-  onProgress?.(30, `Found ${allContracts.length} contracts on-chain`);
-
-  // ============================================
-  // Get creation info for all contracts
-  // ============================================
-
-  const contractAddresses = allContracts
-    .filter((c) => c.kindOnChain !== "EOA")
-    .map((c) => c.address);
-
-  if (contractAddresses.length > 0) {
-    logger.info(`[Analyzer] Fetching creation info for ${contractAddresses.length} contracts...`);
-    const creationInfo = await getContractCreationInfo(contractAddresses, network);
-
-    for (const contract of allContracts) {
-      const info = creationInfo.get(contract.address.toLowerCase());
-      if (info) {
-        contract.creatorAddress = info.creator;
-        contract.creationTxHash = info.txHash;
-        logger.debug(`[Analyzer] ${contract.address.slice(0, 10)}... created by ${info.creator.slice(0, 10)}...`);
-
-        // Check if creator is a contract (factory pattern) and not already visited
-        if (!ctx.visited.has(info.creator.toLowerCase())) {
-          const creatorCode = await rpc.getCode(network, info.creator as Address);
-          if (creatorCode && creatorCode !== "0x") {
-            // Mark the creator as a factory if we're exploring it
-            const shouldExploreFactory = allContracts.length < MAX_CONTRACTS_PER_ANALYSIS;
-
-            if (shouldExploreFactory) {
-              logger.info(`[Analyzer] Creator ${info.creator} is a contract (factory), queueing...`);
-              ctx.queue.push({
-                address: info.creator.toLowerCase(),
-                reason: "FACTORY_CREATOR",
-                sourceAddress: contract.address,
-              });
-            }
-          }
-        }
-      }
-    }
-
-    // Process any newly queued factory contracts
-    while (ctx.queue.length > 0 && allContracts.length < MAX_CONTRACTS_PER_ANALYSIS) {
-      const { address, reason, sourceAddress } = ctx.queue.shift()!;
-
-      if (ctx.visited.has(address)) continue;
-      ctx.visited.add(address);
-
-      logger.info(`[Analyzer] --- Exploring factory: ${address} ---`);
-
-      try {
-        const contractInfo = await analyzeContractOnChain(address, network);
-        contractInfo.recursionReason = reason;
-        contractInfo.recursionSource = sourceAddress;
-        contractInfo.tags.isFactory = true;
-
-        allContracts.push(contractInfo);
-      } catch (error) {
-        logger.error(`[Analyzer] ❌ Failed to analyze factory ${address}:`, error);
+    const isContract = await isAddressContract(ctx, hardcoded);
+    if (isContract) {
+      if (enqueue(ctx, {
+        address: hardcoded,
+        reason: "HARDCODED_ADDRESS",
+        sourceAddress: addr,
+      })) {
+        enqueueCount++;
+        hardcodedEnqueued++;
       }
     }
   }
 
-  onProgress?.(40, "Phase 1 complete. Starting Phase 2...");
+  logger.info(`[Analyzer] Enqueued ${enqueueCount} new addresses`);
+  logger.info(`[Analyzer] Queue: ${ctx.queue.length}, Visited: ${ctx.visited.size}, Pending: ${ctx.pending.size}`);
+}
 
-  // ============================================
-  // Phase 2: Source code analysis
-  // ============================================
+// ============================================
+// Persistence
+// ============================================
 
-  logger.info(`[Analyzer] ========================================`);
-  logger.info(`[Analyzer] PHASE 2: SOURCE CODE ANALYSIS`);
-  logger.info(`[Analyzer] ========================================`);
+async function persistContract(
+  contract: AnalyzedContract,
+  sourceInfo: AnalyzedSource,
+  ctx: AnalysisContext
+): Promise<void> {
+  const { analysisId } = ctx;
 
-  onProgress?.(45, "Phase 2: Fetching source code...");
+  logger.debug(`[Analyzer] Persisting: ${contract.address} (${contract.kindOnChain}, ${contract.sourceType})`);
 
-  // Prioritize: root contract, proxies, factories, implementations
-  const priorityOrder = [
-    rootAddress.toLowerCase(),
-    ...allContracts.filter((c) => c.kindOnChain === "PROXY").map((c) => c.address),
-    ...allContracts.filter((c) => c.tags.isFactory).map((c) => c.address),
-    ...allContracts.filter((c) => c.kindOnChain !== "PROXY" && c.kindOnChain !== "EOA" && !c.tags.isFactory).map((c) => c.address),
-  ];
-
-  const processedAddresses = new Set<string>();
-  let sourceProgress = 45;
-  const progressPerContract = 30 / Math.max(1, priorityOrder.length);
-  let sourceCount = 0;
-
-  // Track hardcoded addresses found in source
-  const hardcodedAddresses = new Set<string>();
-
-  for (const address of priorityOrder) {
-    if (processedAddresses.has(address)) continue;
-    processedAddresses.add(address);
-
-    const contractIndex = allContracts.findIndex((c) => c.address === address);
-    if (contractIndex === -1) continue;
-
-    sourceCount++;
-    logger.info(`[Analyzer] --- Source analysis #${sourceCount}: ${address} ---`);
-
-    try {
-      allContracts[contractIndex] = await analyzeContractSource(allContracts[contractIndex], network);
-
-      // Extract hardcoded addresses from source files
-      const contract = allContracts[contractIndex];
-      if (contract.sourceFiles) {
-        for (const file of contract.sourceFiles) {
-          const addresses = extractHardcodedAddresses(file.content);
-          for (const addr of addresses) {
-            if (addr !== contract.address && !ctx.visited.has(addr)) {
-              hardcodedAddresses.add(addr);
-            }
-          }
-        }
-      }
-
-    } catch (error) {
-      logger.error(`[Analyzer] ❌ Failed to get source for ${address}:`, error);
-    }
-
-    sourceProgress += progressPerContract;
-    onProgress?.(Math.round(sourceProgress), `Analyzed source: ${address.slice(0, 10)}...`);
-  }
-
-  // Enqueue hardcoded addresses (limited)
-  if (hardcodedAddresses.size > 0 && allContracts.length < MAX_CONTRACTS_PER_ANALYSIS) {
-    const hardcodedToAnalyze = Array.from(hardcodedAddresses).slice(0, 10); // Limit to 10
-    logger.info(`[Analyzer] Found ${hardcodedAddresses.size} hardcoded addresses, analyzing ${hardcodedToAnalyze.length}...`);
-
-    for (const addr of hardcodedToAnalyze) {
-      if (allContracts.length >= MAX_CONTRACTS_PER_ANALYSIS) break;
-      if (ctx.visited.has(addr)) continue;
-      ctx.visited.add(addr);
-
-      try {
-        const contractInfo = await analyzeContractOnChain(addr, network);
-        contractInfo.recursionReason = "HARDCODED_ADDRESS";
-        allContracts.push(contractInfo);
-
-        // Get source for hardcoded contracts too
-        const index = allContracts.length - 1;
-        allContracts[index] = await analyzeContractSource(allContracts[index], network);
-      } catch (error) {
-        logger.warn(`[Analyzer] Failed to analyze hardcoded address ${addr}:`, error);
-      }
-    }
-  }
-
-  logger.info(`[Analyzer] Phase 2 complete: analyzed source for ${sourceCount} contracts`);
-  onProgress?.(75, "Saving to database...");
-
-  // ============================================
-  // Save to database
-  // ============================================
-
-  logger.info(`[Analyzer] ========================================`);
-  logger.info(`[Analyzer] SAVING TO DATABASE`);
-  logger.info(`[Analyzer] ========================================`);
-
-  for (const contract of allContracts) {
-    logger.debug(`[Analyzer] Saving contract: ${contract.address} (${contract.kindOnChain}, ${contract.sourceType})`);
-
-    await prisma.contract.upsert({
-      where: {
-        analysisId_address: {
-          analysisId,
-          address: contract.address,
-        },
-      },
-      create: {
+  await prisma.contract.upsert({
+    where: {
+      analysisId_address: {
         analysisId,
         address: contract.address,
-        name: contract.name,
-        kindOnChain: contract.kindOnChain,
-        network,
-        verified: contract.verified,
-        sourceType: contract.sourceType,
-        tagsJson: contract.tags,
-        abiJson: contract.abi,
-        sourceCode: contract.sourceFiles?.[0]?.content,
-        creatorAddress: contract.creatorAddress,
-        creationTxHash: contract.creationTxHash,
-        compilerVersion: contract.compilerVersion,
-        optimizationUsed: contract.optimizationUsed,
-        runs: contract.runs,
-        evmVersion: contract.evmVersion,
-        library: contract.library,
-        licenseType: contract.licenseType,
-        constructorArguments: contract.constructorArguments,
-        proxyFlag: contract.tags.proxyFlag,
-        implementationAddress: contract.proxyInfo?.implementationAddress,
-        swarmSource: contract.swarmSource,
-        decompileError: contract.decompileError,
       },
-      update: {
-        name: contract.name,
-        kindOnChain: contract.kindOnChain,
-        verified: contract.verified,
-        sourceType: contract.sourceType,
-        tagsJson: contract.tags,
-        abiJson: contract.abi,
-        sourceCode: contract.sourceFiles?.[0]?.content,
-        creatorAddress: contract.creatorAddress,
-        creationTxHash: contract.creationTxHash,
-        compilerVersion: contract.compilerVersion,
-        optimizationUsed: contract.optimizationUsed,
-        runs: contract.runs,
-        evmVersion: contract.evmVersion,
-        library: contract.library,
-        licenseType: contract.licenseType,
-        constructorArguments: contract.constructorArguments,
-        proxyFlag: contract.tags.proxyFlag,
-        implementationAddress: contract.proxyInfo?.implementationAddress,
-        swarmSource: contract.swarmSource,
-        decompileError: contract.decompileError,
+    },
+    create: {
+      analysisId,
+      address: contract.address,
+      name: contract.name,
+      kindOnChain: contract.kindOnChain,
+      network: ctx.network,
+      verified: contract.verified,
+      sourceType: contract.sourceType,
+      tagsJson: contract.tags,
+      abiJson: contract.abi,
+      sourceCode: contract.sourceFiles?.[0]?.content,
+      creatorAddress: contract.creatorAddress,
+      creationTxHash: contract.creationTxHash,
+      compilerVersion: contract.compilerVersion,
+      optimizationUsed: contract.optimizationUsed,
+      runs: contract.runs,
+      evmVersion: contract.evmVersion,
+      library: contract.library,
+      licenseType: contract.licenseType,
+      constructorArguments: contract.constructorArguments,
+      proxyFlag: contract.tags.proxyFlag,
+      implementationAddress: contract.implementationAddress,
+      swarmSource: contract.swarmSource,
+      decompileError: contract.decompileError,
+    },
+    update: {
+      name: contract.name,
+      kindOnChain: contract.kindOnChain,
+      verified: contract.verified,
+      sourceType: contract.sourceType,
+      tagsJson: contract.tags,
+      abiJson: contract.abi,
+      sourceCode: contract.sourceFiles?.[0]?.content,
+      creatorAddress: contract.creatorAddress,
+      creationTxHash: contract.creationTxHash,
+      compilerVersion: contract.compilerVersion,
+      optimizationUsed: contract.optimizationUsed,
+      runs: contract.runs,
+      evmVersion: contract.evmVersion,
+      library: contract.library,
+      licenseType: contract.licenseType,
+      constructorArguments: contract.constructorArguments,
+      proxyFlag: contract.tags.proxyFlag,
+      implementationAddress: contract.implementationAddress,
+      swarmSource: contract.swarmSource,
+      decompileError: contract.decompileError,
+    },
+  });
+
+  // Save source files
+  for (const file of sourceInfo.files) {
+    await prisma.sourceFile.create({
+      data: {
+        analysisId,
+        contractAddress: contract.address,
+        path: file.path,
+        sourceType: file.sourceType,
+        content: file.content,
       },
     });
-
-    // Save source files
-    if (contract.sourceFiles) {
-      for (const file of contract.sourceFiles) {
-        logger.debug(`[Analyzer] Saving source file: ${file.path} (${file.content.length} chars)`);
-        await prisma.sourceFile.create({
-          data: {
-            analysisId,
-            contractAddress: contract.address,
-            path: file.path,
-            sourceType: file.sourceType,
-            content: file.content,
-          },
-        });
-      }
-    }
   }
+}
 
-  logger.info(`[Analyzer] Saved ${allContracts.length} contracts to database`);
-  onProgress?.(85, "Building graph edges...");
+async function buildEdges(
+  contracts: AnalyzedContract[],
+  sourcesMap: Map<string, AnalyzedSource>,
+  ctx: AnalysisContext
+): Promise<number> {
+  const { analysisId, rootAddress } = ctx;
 
-  // ============================================
-  // Build edges
-  // ============================================
-
-  logger.info(`[Analyzer] ========================================`);
+  logger.info(`[Analyzer] ════════════════════════════════════════`);
   logger.info(`[Analyzer] BUILDING GRAPH EDGES`);
-  logger.info(`[Analyzer] ========================================`);
+  logger.info(`[Analyzer] ════════════════════════════════════════`);
 
   let edgeCount = 0;
+  const contractAddresses = new Set(contracts.map((c) => c.address));
 
-  for (const contract of allContracts) {
-    // Proxy edges
-    if (contract.proxyInfo?.implementationAddress) {
-      logger.debug(`[Analyzer] Creating IS_PROXY_OF edge: ${contract.address} -> ${contract.proxyInfo.implementationAddress}`);
+  for (const contract of contracts) {
+    const sourceInfo = sourcesMap.get(contract.address);
+
+    // IS_PROXY_OF edge (from RPC/Basescan proxy detection)
+    if (contract.implementationAddress) {
       await prisma.edge.create({
         data: {
           analysisId,
           fromNodeId: `contract:${contract.address}`,
-          toNodeId: `contract:${contract.proxyInfo.implementationAddress.toLowerCase()}`,
+          toNodeId: `contract:${contract.implementationAddress}`,
           kind: "IS_PROXY_OF",
           evidenceJson: {
-            implementationSlot: contract.tags.hasEip1967ImplSlot
-              ? rpc.EIP1967_SLOTS.IMPLEMENTATION
-              : undefined,
+            implementationSlot: contract.tags.hasEip1967ImplSlot ? rpc.EIP1967_SLOTS.IMPLEMENTATION : undefined,
             isMinimalProxy: contract.tags.isMinimalProxy,
           },
         },
@@ -958,35 +1012,21 @@ export async function runAnalysis(ctx: AnalysisContext): Promise<void> {
       edgeCount++;
     }
 
-    // Creator edges - point to the creator address or contract
-    if (contract.creatorAddress) {
-      const creatorLower = contract.creatorAddress.toLowerCase();
-      const creatorIsContract = allContracts.some((c) => c.address === creatorLower);
+    // SOURCE_DECLARED_IMPL edges (from source code patterns)
+    if (sourceInfo) {
+      for (const impl of sourceInfo.declaredImplementations) {
+        // Skip if same as main implementation (avoid duplicate edges)
+        if (impl === contract.implementationAddress) continue;
 
-      logger.debug(`[Analyzer] Creating CREATED_BY edge: ${contract.address} -> ${creatorLower}`);
-      await prisma.edge.create({
-        data: {
-          analysisId,
-          fromNodeId: `contract:${contract.address}`,
-          toNodeId: creatorIsContract ? `contract:${creatorLower}` : `address:${creatorLower}`,
-          kind: "CREATED_BY",
-          evidenceJson: {
-            txHash: contract.creationTxHash,
-          },
-        },
-      });
-      edgeCount++;
-
-      // Also create CREATED edge from creator to this contract
-      if (creatorIsContract) {
+        const implIsContract = contractAddresses.has(impl);
         await prisma.edge.create({
           data: {
             analysisId,
-            fromNodeId: `contract:${creatorLower}`,
-            toNodeId: `contract:${contract.address}`,
-            kind: "CREATED",
+            fromNodeId: `contract:${contract.address}`,
+            toNodeId: implIsContract ? `contract:${impl}` : `address:${impl}`,
+            kind: "SOURCE_DECLARED_IMPL",
             evidenceJson: {
-              txHash: contract.creationTxHash,
+              foundInSource: true,
             },
           },
         });
@@ -994,9 +1034,39 @@ export async function runAnalysis(ctx: AnalysisContext): Promise<void> {
       }
     }
 
-    // Source file edges
-    if (contract.sourceFiles) {
-      for (const file of contract.sourceFiles) {
+    // CREATED_BY / CREATED edges
+    if (contract.creatorAddress) {
+      const creatorIsContract = contractAddresses.has(contract.creatorAddress);
+
+      await prisma.edge.create({
+        data: {
+          analysisId,
+          fromNodeId: `contract:${contract.address}`,
+          toNodeId: creatorIsContract ? `contract:${contract.creatorAddress}` : `address:${contract.creatorAddress}`,
+          kind: "CREATED_BY",
+          evidenceJson: { txHash: contract.creationTxHash },
+        },
+      });
+      edgeCount++;
+
+      if (creatorIsContract) {
+        await prisma.edge.create({
+          data: {
+            analysisId,
+            fromNodeId: `contract:${contract.creatorAddress}`,
+            toNodeId: `contract:${contract.address}`,
+            kind: "CREATED",
+            evidenceJson: { txHash: contract.creationTxHash },
+          },
+        });
+        edgeCount++;
+      }
+    }
+
+    // Source file and type edges
+    if (sourceInfo && sourceInfo.files.length > 0) {
+      // First, create HAS_SOURCE_FILE edges for all files
+      for (const file of sourceInfo.files) {
         const sourceFileId = `source:${contract.address}:${file.path}`;
 
         await prisma.edge.create({
@@ -1008,131 +1078,236 @@ export async function runAnalysis(ctx: AnalysisContext): Promise<void> {
           },
         });
         edgeCount++;
+      }
 
-        // Parse types from source
-        const types = parseSourceForTypes(file.content);
+      // Track created types to avoid duplicates
+      const createdTypes = new Set<string>();
 
-        for (const type of types) {
-          const typeId = `typedef:${contract.address}:${type.name}`;
-          const isRootType = contract.address === rootAddress.toLowerCase() && type.instanciable;
+      // Create type definitions - each type is only created once and linked to its declaring file
+      for (const typeDef of sourceInfo.typeDefs) {
+        const typeId = `typedef:${contract.address}:${typeDef.name}`;
 
-          // Save type definition
-          const sourceFile = await prisma.sourceFile.findFirst({
-            where: {
+        // Skip if we've already created this type (can happen with duplicate type names)
+        if (createdTypes.has(typeId)) {
+          continue;
+        }
+        createdTypes.add(typeId);
+
+        // Find the source file that declares this type (using typeDef.sourcePath)
+        const sourceFile = await prisma.sourceFile.findFirst({
+          where: {
+            analysisId,
+            contractAddress: contract.address,
+            path: typeDef.sourcePath,
+          },
+        });
+
+        if (sourceFile) {
+          await prisma.typeDef.create({
+            data: {
               analysisId,
-              contractAddress: contract.address,
-              path: file.path,
+              sourceFileId: sourceFile.id,
+              name: typeDef.name,
+              kind: typeDef.kind,
+              instanciable: typeDef.instanciable,
+              isRootContractType: typeDef.isRootContractType,
+              metadataJson: {
+                parents: typeDef.parents,
+                interfaces: typeDef.interfaces,
+                libraries: typeDef.libraries,
+              },
             },
           });
+        }
 
-          if (sourceFile) {
-            await prisma.typeDef.create({
-              data: {
-                analysisId,
-                sourceFileId: sourceFile.id,
-                name: type.name,
-                kind: type.kind,
-                instanciable: type.instanciable,
-                isRootContractType: isRootType,
-                metadataJson: {
-                  parents: type.parents,
-                  interfaces: type.interfaces,
-                  libraries: type.libraries,
-                },
-              },
-            });
-          }
+        // Create DECLARES_TYPE edge only from the correct source file that declares this type
+        const declaringSourceFileId = `source:${contract.address}:${typeDef.sourcePath}`;
+        await prisma.edge.create({
+          data: {
+            analysisId,
+            fromNodeId: declaringSourceFileId,
+            toNodeId: typeId,
+            kind: "DECLARES_TYPE",
+          },
+        });
+        edgeCount++;
 
-          // DECLARES_TYPE edge
+        // Note: We no longer create DEFINED_BY edges from Contract to TypeDef
+        // TypeDefs are only linked via DECLARES_TYPE from their declaring SourceFile
+
+        for (const parent of typeDef.parents) {
           await prisma.edge.create({
             data: {
               analysisId,
-              fromNodeId: sourceFileId,
-              toNodeId: typeId,
-              kind: "DECLARES_TYPE",
+              fromNodeId: typeId,
+              toNodeId: `typedef:${contract.address}:${parent}`,
+              kind: "EXTENDS_CONTRACT",
             },
           });
           edgeCount++;
-
-          // DEFINED_BY edge (for root contract)
-          if (isRootType) {
-            await prisma.edge.create({
-              data: {
-                analysisId,
-                fromNodeId: `contract:${contract.address}`,
-                toNodeId: typeId,
-                kind: "DEFINED_BY",
-              },
-            });
-            edgeCount++;
-          }
-
-          // Inheritance edges
-          for (const parent of type.parents) {
-            await prisma.edge.create({
-              data: {
-                analysisId,
-                fromNodeId: typeId,
-                toNodeId: `typedef:${contract.address}:${parent}`,
-                kind: "EXTENDS_CONTRACT",
-              },
-            });
-            edgeCount++;
-          }
-
-          // Interface edges
-          for (const iface of type.interfaces) {
-            await prisma.edge.create({
-              data: {
-                analysisId,
-                fromNodeId: typeId,
-                toNodeId: `typedef:${contract.address}:${iface}`,
-                kind: "IMPLEMENTS_INTERFACE",
-              },
-            });
-            edgeCount++;
-          }
-
-          // Library edges
-          for (const lib of type.libraries) {
-            await prisma.edge.create({
-              data: {
-                analysisId,
-                fromNodeId: typeId,
-                toNodeId: `typedef:${contract.address}:${lib}`,
-                kind: "USES_LIBRARY",
-              },
-            });
-            edgeCount++;
-          }
         }
 
-        // Create REFERENCES_ADDRESS edges for hardcoded addresses
-        const hardcodedInFile = extractHardcodedAddresses(file.content);
-        for (const addr of hardcodedInFile) {
-          const addrIsContract = allContracts.some((c) => c.address === addr);
-
+        for (const iface of typeDef.interfaces) {
           await prisma.edge.create({
             data: {
               analysisId,
-              fromNodeId: `contract:${contract.address}`,
-              toNodeId: addrIsContract ? `contract:${addr}` : `address:${addr}`,
-              kind: "REFERENCES_ADDRESS",
-              evidenceJson: {
-                foundInFile: file.path,
-              },
+              fromNodeId: typeId,
+              toNodeId: `typedef:${contract.address}:${iface}`,
+              kind: "IMPLEMENTS_INTERFACE",
+            },
+          });
+          edgeCount++;
+        }
+
+        for (const lib of typeDef.libraries) {
+          await prisma.edge.create({
+            data: {
+              analysisId,
+              fromNodeId: typeId,
+              toNodeId: `typedef:${contract.address}:${lib}`,
+              kind: "USES_LIBRARY",
             },
           });
           edgeCount++;
         }
       }
+
+      // REFERENCES_ADDRESS edges - deduplicate per address
+      const referencedAddresses = new Set<string>();
+      for (const addr of sourceInfo.hardcodedAddresses) {
+        if (referencedAddresses.has(addr)) continue;
+        referencedAddresses.add(addr);
+
+        const addrIsContract = contractAddresses.has(addr);
+
+        await prisma.edge.create({
+          data: {
+            analysisId,
+            fromNodeId: `contract:${contract.address}`,
+            toNodeId: addrIsContract ? `contract:${addr}` : `address:${addr}`,
+            kind: "REFERENCES_ADDRESS",
+          },
+        });
+        edgeCount++;
+      }
+    }
+
+    // CALLS_RUNTIME edges
+    for (const callee of contract.runtimeCallees ?? []) {
+      const calleeIsContract = contractAddresses.has(callee);
+
+      await prisma.edge.create({
+        data: {
+          analysisId,
+          fromNodeId: `contract:${contract.address}`,
+          toNodeId: calleeIsContract ? `contract:${callee}` : `address:${callee}`,
+          kind: "CALLS_RUNTIME",
+        },
+      });
+      edgeCount++;
     }
   }
 
   logger.info(`[Analyzer] Created ${edgeCount} graph edges`);
-  logger.info(`[Analyzer] ========================================`);
+  return edgeCount;
+}
+
+// ============================================
+// Main Analysis Pipeline
+// ============================================
+
+export async function runAnalysis(ctx: AnalysisContext): Promise<void> {
+  const { analysisId, network, rootAddress, onProgress } = ctx;
+
+  logger.info(`[Analyzer] ════════════════════════════════════════════════════════`);
+  logger.info(`[Analyzer] STARTING ANALYSIS`);
+  logger.info(`[Analyzer] ════════════════════════════════════════════════════════`);
+  logger.info(`[Analyzer] Analysis ID: ${analysisId}`);
+  logger.info(`[Analyzer] Root Address: ${rootAddress}`);
+  logger.info(`[Analyzer] Network: ${network}`);
+  logger.info(`[Analyzer] Max Contracts: ${MAX_CONTRACTS_PER_ANALYSIS}`);
+  logger.info(`[Analyzer] ════════════════════════════════════════════════════════`);
+
+  onProgress?.(5, "Initializing analysis...");
+
+  // Initialize context
+  const normalizedRoot = rootAddress.toLowerCase();
+  ctx.queue = [{ address: normalizedRoot, reason: "ROOT" }];
+  ctx.visited = new Set();
+  ctx.pending = new Set([normalizedRoot]);
+  ctx.bytecodeCache = new Map();
+
+  const allContracts: AnalyzedContract[] = [];
+  const sourcesMap = new Map<string, AnalyzedSource>();
+
+  // Main Loop
+  let explorationCount = 0;
+
+  while (ctx.queue.length > 0 && ctx.visited.size < MAX_CONTRACTS_PER_ANALYSIS) {
+    const item = ctx.queue.shift()!;
+    const address = item.address;
+
+    if (ctx.visited.has(address)) {
+      ctx.pending.delete(address);
+      continue;
+    }
+
+    ctx.pending.delete(address);
+    ctx.visited.add(address);
+    explorationCount++;
+
+    const progress = 10 + Math.round((explorationCount / MAX_CONTRACTS_PER_ANALYSIS) * 60);
+    onProgress?.(progress, `Analyzing contract ${explorationCount}: ${address.slice(0, 10)}...`);
+
+    logger.info(`[Analyzer] ════════════════════════════════════════════════════════`);
+    logger.info(`[Analyzer] CONTRACT #${explorationCount}/${MAX_CONTRACTS_PER_ANALYSIS}`);
+    logger.info(`[Analyzer] Address: ${address}`);
+    logger.info(`[Analyzer] Reason: ${item.reason}`);
+    logger.info(`[Analyzer] Source: ${item.sourceAddress || "(root)"}`);
+    logger.info(`[Analyzer] Queue: ${ctx.queue.length}, Visited: ${ctx.visited.size}, Pending: ${ctx.pending.size}`);
+    logger.info(`[Analyzer] ════════════════════════════════════════════════════════`);
+
+    try {
+      // Phase 1: On-chain analysis (RPC + Basescan metadata)
+      const contract = await analyzeContractOnChain(address, ctx);
+      contract.recursionReason = item.reason;
+      contract.recursionSource = item.sourceAddress;
+
+      // Phase 2: Source code analysis (Basescan → Implementation → Panoramix)
+      const sourceInfo = await analyzeContractSource(contract, ctx);
+
+      // Phase 3: Enqueue ALL related addresses
+      await enqueueRelatedAddresses(contract, sourceInfo, ctx);
+
+      // Phase 4: Persist to database
+      await persistContract(contract, sourceInfo, ctx);
+
+      allContracts.push(contract);
+      sourcesMap.set(address, sourceInfo);
+
+    } catch (error) {
+      logger.error(`[Analyzer] ❌ Failed to analyze ${address}:`, error);
+    }
+  }
+
+  // Log why we stopped
+  if (ctx.queue.length === 0) {
+    logger.info(`[Analyzer] ✅ Queue empty - all reachable contracts analyzed`);
+  } else {
+    logger.warn(`[Analyzer] ⚠️ Hit max contracts limit (${MAX_CONTRACTS_PER_ANALYSIS})`);
+    logger.warn(`[Analyzer] Remaining in queue: ${ctx.queue.length}`);
+  }
+
+  onProgress?.(75, "Building graph edges...");
+
+  // Build Graph Edges
+  const edgeCount = await buildEdges(allContracts, sourcesMap, ctx);
+
+  logger.info(`[Analyzer] ════════════════════════════════════════════════════════`);
   logger.info(`[Analyzer] ANALYSIS COMPLETE`);
-  logger.info(`[Analyzer] ========================================`);
+  logger.info(`[Analyzer] Contracts analyzed: ${allContracts.length}`);
+  logger.info(`[Analyzer] Edges created: ${edgeCount}`);
+  logger.info(`[Analyzer] ════════════════════════════════════════════════════════`);
 
   onProgress?.(90, "Analysis complete");
 }

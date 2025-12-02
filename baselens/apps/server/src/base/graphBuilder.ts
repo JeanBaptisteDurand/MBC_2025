@@ -224,23 +224,28 @@ export async function buildGraphData(analysisId: string): Promise<GraphData> {
     if (!nodeIds.has(nodeId)) {
       nodeIds.add(nodeId);
 
-      // Try to determine a label for this address
-      // For now, check if it's a known factory creator
+      // Check if this address deployed any contracts in our analysis
       const createdContracts = contracts.filter(
         (c) => c.creatorAddress?.toLowerCase() === address
       );
+
+      // AddressNodes are created for addresses that are NOT contracts in our analysis
+      // If they deployed contracts, they are "Deployer Wallets" (EOAs)
+      // Contract deployers (factories) should be ContractNodes, not AddressNodes
+      let label: string | undefined;
+      if (createdContracts.length > 0) {
+        label = `Deployer Wallet (${createdContracts.length} contract${createdContracts.length > 1 ? "s" : ""})`;
+      }
 
       const addressNode: AddressNode = {
         kind: "address",
         id: nodeId,
         address,
-        label: createdContracts.length > 0
-          ? `Factory/Deployer (${createdContracts.length} contracts)`
-          : undefined,
+        label,
       };
 
       nodes.push(addressNode);
-      logger.debug(`[GraphBuilder]   Address: ${address.slice(0, 10)}... (${addressNode.label || "unknown"})`);
+      logger.debug(`[GraphBuilder]   Address: ${address.slice(0, 10)}... (${addressNode.label || "wallet"})`);
     }
   }
 

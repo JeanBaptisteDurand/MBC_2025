@@ -7,7 +7,8 @@ RUN npm install -g pnpm@9
 WORKDIR /app
 
 # Copy package files
-COPY package.json pnpm-workspace.yaml pnpm-lock.yaml* ./
+COPY package.json pnpm-workspace.yaml ./
+COPY pnpm-lock.yaml ./
 COPY packages/core/package.json ./packages/core/
 COPY apps/web/package.json ./apps/web/
 
@@ -29,4 +30,3 @@ WORKDIR /app/apps/web
 EXPOSE 3000
 
 CMD ["pnpm", "dev", "--host", "0.0.0.0"]
-

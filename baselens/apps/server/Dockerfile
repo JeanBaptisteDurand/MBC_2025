@@ -12,17 +12,21 @@ RUN apt-get update && apt-get install -y \
     netcat-openbsd \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Panoramix decompiler
-RUN pip3 install --break-system-packages panoramix-decompiler && \
-    echo "✅ Panoramix installed successfully" && \
-    panoramix --help > /dev/null 2>&1 && echo "✅ Panoramix CLI is working" || \
-    echo "⚠️ Panoramix CLI test failed" || \
+# Install Panoramix decompiler (don't fail build if it fails)
+RUN pip3 install --break-system-packages panoramix-decompiler 2>&1 && \
+    echo "✅ Panoramix installed successfully" || \
     echo "❌ PANORAMIX INSTALLATION FAILED - decompilation will not work for unverified contracts"
+
+# Test Panoramix (informational only)
+RUN panoramix --help > /dev/null 2>&1 && \
+    echo "✅ Panoramix CLI test passed" || \
+    echo "⚠️ Panoramix CLI test failed (may still work)"
 
 WORKDIR /app
 
 # Copy package files
-COPY package.json pnpm-workspace.yaml pnpm-lock.yaml* ./
+COPY package.json pnpm-workspace.yaml ./
+COPY pnpm-lock.yaml ./
 COPY packages/core/package.json ./packages/core/
 COPY apps/server/package.json ./apps/server/
 
@@ -53,4 +57,3 @@ EXPOSE 3001
 
 # Use entrypoint script to initialize DB before starting
 ENTRYPOINT ["/docker-entrypoint.sh"]
-

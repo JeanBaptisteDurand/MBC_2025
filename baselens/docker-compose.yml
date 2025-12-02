@@ -47,6 +47,7 @@ services:
       redis:
         condition: service_healthy
     environment:
+      NODE_ENV: development
       DATABASE_URL: postgresql://${POSTGRES_USER:-baselens}:${POSTGRES_PASSWORD:-baselens}@postgres:5432/${POSTGRES_DB:-baselens}?schema=public
       REDIS_HOST: redis
       REDIS_PORT: 6379
@@ -61,9 +62,9 @@ services:
       - "3001:3001"
     volumes:
       # Hot reload: mount source code for development
-      - ./apps/server/src:/app/apps/server/src:ro
-      - ./apps/server/prisma:/app/apps/server/prisma:ro
-      - ./packages/core/src:/app/packages/core/src:ro
+      - ./apps/server/src:/app/apps/server/src
+      - ./apps/server/prisma:/app/apps/server/prisma
+      - ./packages/core/src:/app/packages/core/src
 
   web:
     build:
@@ -79,13 +80,11 @@ services:
       - "3000:3000"
     volumes:
       # Hot reload: mount source code for development
-      - ./apps/web/src:/app/apps/web/src:ro
-      - ./apps/web/index.html:/app/apps/web/index.html:ro
-      - ./apps/web/public:/app/apps/web/public:ro
-      - ./packages/core/src:/app/packages/core/src:ro
+      - ./apps/web/src:/app/apps/web/src
+      - ./apps/web/index.html:/app/apps/web/index.html
+      - ./apps/web/public:/app/apps/web/public
+      - ./packages/core/src:/app/packages/core/src
 
 volumes:
   postgres_data:
   redis_data:
-
-

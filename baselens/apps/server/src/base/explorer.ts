@@ -12,6 +12,63 @@ const BASESCAN_URLS = {
   "base-sepolia": "https://api-sepolia.basescan.org/api",
 } as const;
 
+// ============================================
+// Rate Limiter - 2 calls per second (strict)
+// ============================================
+
+const RATE_LIMIT_CALLS = 2;
+const RATE_LIMIT_WINDOW_MS = 1000; // 1 second
+const MIN_DELAY_BETWEEN_CALLS_MS = 500; // At least 500ms between calls
+let lastCallTime = 0;
+const callTimestamps: number[] = [];
+
+/**
+ * Wait if necessary to respect rate limits
+ * Ensures max 2 calls per second with minimum 500ms between calls
+ */
+async function waitForRateLimit(): Promise<void> {
+  const now = Date.now();
+  
+  // Ensure minimum delay between calls (500ms = max 2 per second)
+  const timeSinceLastCall = now - lastCallTime;
+  if (lastCallTime > 0 && timeSinceLastCall < MIN_DELAY_BETWEEN_CALLS_MS) {
+    const waitTime = MIN_DELAY_BETWEEN_CALLS_MS - timeSinceLastCall + 10; // +10ms buffer
+    logger.info(`[Basescan] ⏳ Rate limit: waiting ${waitTime}ms (min delay between calls)`);
+    await new Promise((resolve) => setTimeout(resolve, waitTime));
+  }
+  
+  // Also check sliding window (extra safety)
+  const checkTime = Date.now();
+  while (callTimestamps.length > 0 && callTimestamps[0] < checkTime - RATE_LIMIT_WINDOW_MS) {
+    callTimestamps.shift();
+  }
+  
+  if (callTimestamps.length >= RATE_LIMIT_CALLS) {
+    const oldestCall = callTimestamps[0];
+    const waitTime = oldestCall + RATE_LIMIT_WINDOW_MS - checkTime + 50;
+    
+    if (waitTime > 0) {
+      logger.info(`[Basescan] ⏳ Rate limit: waiting ${waitTime}ms (${callTimestamps.length} calls in window)`);
+      await new Promise((resolve) => setTimeout(resolve, waitTime));
+    }
+  }
+  
+  // Record this call
+  lastCallTime = Date.now();
+  callTimestamps.push(lastCallTime);
+  
+  // Keep only recent timestamps
+  while (callTimestamps.length > 10) {
+    callTimestamps.shift();
+  }
+  
+  logger.debug(`[Basescan] Rate limit: ${callTimestamps.length}/${RATE_LIMIT_CALLS} calls in last second`);
+}
+
+// ============================================
+// Types
+// ============================================
+
 interface BasescanResponse<T> {
   status: "0" | "1";
   message: string;
@@ -41,12 +98,15 @@ interface ContractCreationResult {
 }
 
 /**
- * Make a request to Basescan API
+ * Make a request to Basescan API (with rate limiting)
  */
 async function basescanRequest<T>(
   network: Network,
   params: Record<string, string>
 ): Promise<T | null> {
+  // Wait for rate limit before making the request
+  await waitForRateLimit();
+  
   const baseUrl = BASESCAN_URLS[network];
   const apiKey = config.BASESCAN_API_KEY;
   
@@ -77,8 +137,8 @@ async function basescanRequest<T>(
     if (data.status === "0") {
       // Check if it's a rate limit or actual error
       if (typeof data.result === "string" && data.result.includes("rate limit")) {
-        logger.warn(`[Basescan] ⚠️ Rate limit hit, waiting 1s... (${duration}ms)`);
-        await new Promise((r) => setTimeout(r, 1000));
+        logger.warn(`[Basescan] ⚠️ Rate limit hit despite throttling, waiting 2s... (${duration}ms)`);
+        await new Promise((r) => setTimeout(r, 2000));
         return basescanRequest(network, params);
       }
       

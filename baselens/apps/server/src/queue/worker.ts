@@ -14,7 +14,7 @@ import { prisma } from "../db/prismaClient.js";
 import { logger } from "../logger.js";
 import { runAnalysis, type AnalysisContext } from "../base/analyzer.js";
 import { buildGraphData } from "../base/graphBuilder.js";
-import { generateAnalysisSummary, indexAnalysisForRag } from "../ai/explanations.js";
+import { generateAnalysisSummary, indexAnalysisForRag, generateAllContractExplanations } from "../ai/explanations.js";
 
 let worker: Worker<AnalysisJobData, AnalysisJobResult> | null = null;
 
@@ -82,7 +82,7 @@ async function processAnalysisJob(
 
     // Generate AI summary
     logger.info(`[Worker] Generating AI summary...`);
-    await job.updateProgress(94);
+    await job.updateProgress(93);
     try {
       const summary = await generateAnalysisSummary(analysisId);
       logger.info(`[Worker] ✅ AI summary generated (${summary.summary.length} chars)`);
@@ -91,9 +91,20 @@ async function processAnalysisJob(
       // Don't fail the job, summary is optional
     }
 
+    // Generate AI explanations for ALL contracts
+    logger.info(`[Worker] Generating AI explanations for all contracts...`);
+    await job.updateProgress(95);
+    try {
+      await generateAllContractExplanations(analysisId);
+      logger.info(`[Worker] ✅ All contract explanations generated`);
+    } catch (error) {
+      logger.warn(`[Worker] ⚠️ Failed to generate contract explanations (non-fatal):`, error);
+      // Don't fail the job, explanations are optional
+    }
+
     // Index for RAG
     logger.info(`[Worker] Indexing for RAG...`);
-    await job.updateProgress(97);
+    await job.updateProgress(98);
     try {
       await indexAnalysisForRag(analysisId);
       logger.info(`[Worker] ✅ RAG indexing complete`);

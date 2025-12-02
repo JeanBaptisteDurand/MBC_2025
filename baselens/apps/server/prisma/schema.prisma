@@ -74,6 +74,12 @@ model Contract {
   swarmSource          String?
   // Decompilation error tracking
   decompileError       String?
+  // Flag when panoramix fails to decompile (no usable source at all)
+  noSource             Boolean @default(false)
+  // Pre-generated AI explanation to avoid regenerating each time
+  aiExplanation        String?
+  // Track the source type when AI explanation was generated (to detect upgrades)
+  aiExplanationSourceType String?
 
   analysis Analysis @relation(fields: [analysisId], references: [id], onDelete: Cascade)
 

@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@baselens/core": "workspace:*",
+    "@coinbase/onchainkit": "^0.36.6",
     "@radix-ui/react-dialog": "^1.1.4",
     "@radix-ui/react-dropdown-menu": "^2.1.4",
     "@radix-ui/react-scroll-area": "^1.2.2",
@@ -28,7 +29,9 @@
     "react-router-dom": "^7.1.0",
     "reactflow": "^11.11.4",
     "remark-gfm": "^4.0.0",
-    "tailwind-merge": "^2.6.0"
+    "tailwind-merge": "^2.6.0",
+    "viem": "^2.21.0",
+    "wagmi": "^2.14.0"
   },
   "devDependencies": {
     "@types/react": "^18.3.17",
@@ -41,4 +44,3 @@
     "vite": "^6.0.5"
   }
 }
-

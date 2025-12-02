@@ -1,5 +1,7 @@
 import { Outlet, Link, useLocation } from "react-router-dom";
 import { Activity, History, Sun, Moon, Hexagon } from "lucide-react";
+import { ConnectWallet, Wallet, WalletDropdown, WalletDropdownDisconnect } from "@coinbase/onchainkit/wallet";
+import { Address, Avatar, Name, Identity } from "@coinbase/onchainkit/identity";
 import { useTheme } from "../hooks/useTheme";
 import { cn } from "../utils/cn";
 
@@ -62,6 +64,23 @@ export default function Layout() {
                 <Moon className="w-5 h-5" />
               )}
             </button>
+
+            {/* Wallet Connect */}
+            <Wallet>
+              <ConnectWallet>
+                <Avatar className="h-6 w-6" />
+                <Name />
+                <Address />
+              </ConnectWallet>
+              <WalletDropdown>
+                <Identity className="px-4 pt-3 pb-2" hasCopyAddressOnClick>
+                  <Avatar />
+                  <Name />
+                  <Address />
+                </Identity>
+                <WalletDropdownDisconnect />
+              </WalletDropdown>
+            </Wallet>
           </nav>
         </div>
       </header>

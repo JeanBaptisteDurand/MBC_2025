@@ -92,6 +92,10 @@ export interface AnalyzedContract {
   recursionSource?: string;
   // Track all discovered implementations (from various sources)
   discoveredImplementations?: string[];
+  // Flag when panoramix fails to decompile (no usable source at all)
+  noSource?: boolean;
+  // Previous source type (for upgrade detection)
+  previousSourceType?: SourceType;
 }
 
 export interface AnalyzedSource {
@@ -637,6 +641,14 @@ async function analyzeContractSource(
       if (decompResult.success) {
         logger.info(`[Analyzer] ✅ DECOMPILED via ${decompResult.method} (${decompResult.decompiled.length} chars)`);
 
+        // Check if Panoramix returned a "failed" message (noSource flag)
+        if (decompResult.noSource) {
+          logger.warn(`[Analyzer] ⚠️ Panoramix returned failure message - no usable source`);
+          contract.noSource = true;
+          contract.decompileError = decompResult.decompiled; // Store the error message for AI context
+          contract.tags.decompileError = decompResult.decompiled;
+        }
+
         contract.verified = false;
         contract.sourceType = "decompiled";
         result.files = [{
@@ -648,6 +660,7 @@ async function analyzeContractSource(
       } else {
         logger.warn(`[Analyzer] ❌ Panoramix FAILED: ${decompResult.error}`);
         contract.sourceType = "none";
+        contract.noSource = true;
         contract.decompileError = decompResult.error;
         contract.tags.decompileError = decompResult.error;
       }
@@ -939,6 +952,7 @@ async function persistContract(
       implementationAddress: contract.implementationAddress,
       swarmSource: contract.swarmSource,
       decompileError: contract.decompileError,
+      noSource: contract.noSource ?? false,
     },
     update: {
       name: contract.name,
@@ -961,6 +975,7 @@ async function persistContract(
       implementationAddress: contract.implementationAddress,
       swarmSource: contract.swarmSource,
       decompileError: contract.decompileError,
+      noSource: contract.noSource ?? false,
     },
   });
 

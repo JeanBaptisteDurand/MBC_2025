@@ -190,6 +190,37 @@ export async function decompileFunctionFromBytecode(
 }
 
 /**
+ * Check if decompiled output indicates Panoramix failed to decompile
+ * (returns "# I failed with these:" message)
+ */
+export function isDecompilationFailed(output: string): boolean {
+  if (!output || output.trim().length === 0) return true;
+
+  // Check for known failure patterns from Panoramix
+  const failurePatterns = [
+    "#  I failed with these:",
+    "# I failed with these:",
+    "I failed with these:",
+    "# Analysis failed",
+    "# Decompilation failed",
+    "# No functions found",
+  ];
+
+  for (const pattern of failurePatterns) {
+    if (output.includes(pattern)) {
+      return true;
+    }
+  }
+
+  // If output is too short, it's probably a failure
+  if (output.trim().length < 50) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
  * Try to decompile with fallback strategies
  * PRIORITY: Bytecode first (more reliable), then address-based
  */
@@ -202,6 +233,7 @@ export async function decompileContract(
   decompiled: string;
   method: "bytecode" | "address" | "none";
   error?: string;
+  noSource?: boolean; // True if Panoramix explicitly failed
 }> {
   logger.info(`[Panoramix] === Starting decompilation for ${address} ===`);
 
@@ -228,11 +260,23 @@ export async function decompileContract(
     try {
       const result = await decompileWithPanoramixFromBytecode(bytecode);
       if (result && result.trim().length > 0) {
+        // Check if Panoramix returned a "failed" message
+        if (isDecompilationFailed(result)) {
+          logger.warn(`[Panoramix] ⚠️ Bytecode decompilation returned failure message`);
+          // Still return the result so AI can explain there's no source
+          return {
+            success: true,
+            decompiled: result,
+            method: "bytecode",
+            noSource: true, // Flag that we have no usable source
+          };
+        }
         logger.info(`[Panoramix] ✅ SUCCESS via bytecode method`);
         return {
           success: true,
           decompiled: result,
           method: "bytecode",
+          noSource: false,
         };
       }
       logger.warn(`[Panoramix] Bytecode method returned empty, trying address method...`);
@@ -249,11 +293,22 @@ export async function decompileContract(
   try {
     const result = await decompileWithPanoramixFromAddress(address, network);
     if (result && result.trim().length > 0) {
+      // Check if Panoramix returned a "failed" message
+      if (isDecompilationFailed(result)) {
+        logger.warn(`[Panoramix] ⚠️ Address decompilation returned failure message`);
+        return {
+          success: true,
+          decompiled: result,
+          method: "address",
+          noSource: true,
+        };
+      }
       logger.info(`[Panoramix] ✅ SUCCESS via address method`);
       return {
         success: true,
         decompiled: result,
         method: "address",
+        noSource: false,
       };
     }
     logger.warn(`[Panoramix] Address method returned empty`);
@@ -267,6 +322,7 @@ export async function decompileContract(
     decompiled: "",
     method: "none",
     error: "All decompilation methods failed",
+    noSource: true,
   };
 }
 

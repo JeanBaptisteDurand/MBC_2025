@@ -17,6 +17,22 @@ const chatRequestSchema = z.object({
   analysisId: z.string().uuid(),
   chatId: z.string().uuid().optional(),
   question: z.string().min(1).max(2000),
+  // Graph context from frontend
+  graphContext: z.object({
+    // Active nodes visible on the graph (with their names)
+    visibleNodes: z.array(z.object({
+      id: z.string(),
+      kind: z.string(),
+      name: z.string().optional(),
+      address: z.string().optional(),
+    })).optional(),
+    // Edges showing relationships between nodes
+    edges: z.array(z.object({
+      kind: z.string(),
+      from: z.string(),
+      to: z.string(),
+    })).optional(),
+  }).optional(),
 });
 
 // ============================================
@@ -26,18 +42,18 @@ const chatRequestSchema = z.object({
 router.post("/chat", async (req, res) => {
   try {
     const parsed = chatRequestSchema.safeParse(req.body);
-    
+
     if (!parsed.success) {
       return res.status(400).json({
         error: "Invalid request",
         details: parsed.error.format(),
       });
     }
-    
-    const { analysisId, chatId, question } = parsed.data;
-    
-    const result = await processRagChat(analysisId, question, chatId);
-    
+
+    const { analysisId, chatId, question, graphContext } = parsed.data;
+
+    const result = await processRagChat(analysisId, question, chatId, graphContext);
+
     return res.json({
       chatId: result.chatId,
       answer: result.answer,
@@ -56,11 +72,11 @@ router.get("/chat", async (req, res) => {
   try {
     const analysisId = req.query.analysisId as string;
     const chatId = req.query.chatId as string | undefined;
-    
+
     if (!analysisId) {
       return res.status(400).json({ error: "analysisId is required" });
     }
-    
+
     // If chatId provided, get that specific chat
     if (chatId) {
       const history = await getChatHistory(chatId);
@@ -74,10 +90,10 @@ router.get("/chat", async (req, res) => {
         })),
       });
     }
-    
+
     // Otherwise, get or create the latest chat
     const chat = await getLatestChat(analysisId);
-    
+
     if (!chat) {
       // No chat exists yet, return empty
       return res.json({
@@ -85,7 +101,7 @@ router.get("/chat", async (req, res) => {
         messages: [],
       });
     }
-    
+
     return res.json({
       chatId: chat.chatId,
       messages: chat.messages.map((m) => ({
@@ -108,9 +124,9 @@ router.get("/chat", async (req, res) => {
 router.get("/chat/:chatId/history", async (req, res) => {
   try {
     const { chatId } = req.params;
-    
+
     const history = await getChatHistory(chatId);
-    
+
     return res.json({
       chatId,
       messages: history.messages.map((m) => ({

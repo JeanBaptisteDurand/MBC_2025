@@ -74,9 +74,44 @@ function computeSmartLayout(
   visibleNodeKinds: Set<string>,
   visibleEdgeKinds: Set<string>
 ): { nodes: FlowNode[]; edges: FlowEdge[] } {
-  const filteredNodes = graphData.nodes.filter((node) =>
-    visibleNodeKinds.has(node.kind)
-  );
+  // When "address" is not visible but "contract" is, we're in a contracts-focused view
+  const hideWallets = !visibleNodeKinds.has("address") && visibleNodeKinds.has("contract");
+
+  // Filter nodes based on visibility settings
+  const filteredNodes = graphData.nodes.filter((node) => {
+    // Handle address nodes - show deployer wallets when contracts are visible
+    if (node.kind === "address") {
+      if (visibleNodeKinds.has("address")) {
+        return true;
+      }
+      // Always include deployer addresses when contracts are visible
+      if (
+        visibleNodeKinds.has("contract") &&
+        "label" in node &&
+        typeof node.label === "string" &&
+        node.label.startsWith("Deployer Wallet")
+      ) {
+        return true;
+      }
+      return false;
+    }
+
+    // Handle contract nodes
+    if (node.kind === "contract") {
+      if (!visibleNodeKinds.has("contract")) {
+        return false;
+      }
+      // EOA are wallets, not real contracts - always hide them in contracts-focused views
+      if (hideWallets && "kindOnChain" in node && (node as ContractNodeData).kindOnChain === "EOA") {
+        return false;
+      }
+      // Show all real contracts (PROXY, CONTRACT_SIMPLE, IMPLEMENTATION)
+      return true;
+    }
+
+    // For all other node kinds, use standard visibility check
+    return visibleNodeKinds.has(node.kind);
+  });
   const nodeIds = new Set(filteredNodes.map((n) => n.id));
 
   // Build adjacency maps for relationships
@@ -563,7 +598,7 @@ export default function GraphView() {
       />
 
       {/* RAG Chat Widget */}
-      <RagChatWidget analysisId={analysisId!} />
+      <RagChatWidget analysisId={analysisId!} graphData={graphData} />
 
       {/* Source Code Modal */}
       <SourceCodeModal

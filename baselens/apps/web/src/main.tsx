@@ -5,6 +5,8 @@ import { BrowserRouter } from "react-router-dom";
 import App from "./App";
 import { ThemeProvider } from "./hooks/useTheme";
 import { ToastProvider } from "./components/ui/Toast";
+import { OnchainKitProvider } from "./providers/OnchainKitProvider";
+import "@coinbase/onchainkit/styles.css";
 import "./styles/index.css";
 
 const queryClient = new QueryClient({
@@ -19,13 +21,15 @@ const queryClient = new QueryClient({
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <QueryClientProvider client={queryClient}>
-      <BrowserRouter>
-        <ThemeProvider>
-          <ToastProvider>
-            <App />
-          </ToastProvider>
-        </ThemeProvider>
-      </BrowserRouter>
+      <OnchainKitProvider>
+        <BrowserRouter>
+          <ThemeProvider>
+            <ToastProvider>
+              <App />
+            </ToastProvider>
+          </ThemeProvider>
+        </BrowserRouter>
+      </OnchainKitProvider>
     </QueryClientProvider>
   </React.StrictMode>
 );

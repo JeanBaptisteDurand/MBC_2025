@@ -5,12 +5,18 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { getRagChat, sendRagMessage } from "../api/endpoints";
 import { cn } from "../utils/cn";
+import type { RagGraphContext, Node, Edge } from "@baselens/core";
 
 interface RagChatWidgetProps {
   analysisId: string;
+  /** Graph data to provide context to the AI */
+  graphData?: {
+    nodes: Node[];
+    edges: Edge[];
+  };
 }
 
-export default function RagChatWidget({ analysisId }: RagChatWidgetProps) {
+export default function RagChatWidget({ analysisId, graphData }: RagChatWidgetProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [input, setInput] = useState("");
   const [chatId, setChatId] = useState<string | null>(null);
@@ -31,10 +37,56 @@ export default function RagChatWidget({ analysisId }: RagChatWidgetProps) {
     }
   }, [chatData, chatId]);
 
+  // Build graph context from graphData
+  const buildGraphContext = (): RagGraphContext | undefined => {
+    if (!graphData) return undefined;
+
+    const visibleNodes = graphData.nodes.map((node) => {
+      let name: string | undefined;
+      let address: string | undefined;
+
+      if (node.kind === "contract") {
+        name = node.name || undefined;
+        address = node.address;
+      } else if (node.kind === "sourceFile") {
+        name = node.path;
+        address = node.contractAddress;
+      } else if (node.kind === "typeDef") {
+        name = node.name;
+      } else if (node.kind === "address") {
+        address = node.address;
+        name = node.label || undefined;
+      }
+
+      return {
+        id: node.id,
+        kind: node.kind,
+        name,
+        address,
+      };
+    });
+
+    const edges = graphData.edges.map((edge) => ({
+      kind: edge.kind,
+      from: edge.from,
+      to: edge.to,
+    }));
+
+    return {
+      visibleNodes,
+      edges,
+    };
+  };
+
   // Send message mutation
   const sendMutation = useMutation({
     mutationFn: (question: string) =>
-      sendRagMessage({ analysisId, chatId: chatId || undefined, question }),
+      sendRagMessage({
+        analysisId,
+        chatId: chatId || undefined,
+        question,
+        graphContext: buildGraphContext(),
+      }),
     onSuccess: (data) => {
       setChatId(data.chatId);
       queryClient.invalidateQueries({ queryKey: ["ragChat", analysisId] });

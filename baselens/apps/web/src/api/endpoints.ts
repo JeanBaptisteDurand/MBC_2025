@@ -134,7 +134,13 @@ export async function getTypeDefinition(
 export async function sendRagMessage(
   data: RagChatRequest
 ): Promise<RagChatResponse> {
-  return api.post<RagChatResponse>("/api/rag/chat", data);
+  // Send the request with graphContext if provided
+  return api.post<RagChatResponse>("/api/rag/chat", {
+    analysisId: data.analysisId,
+    chatId: data.chatId,
+    question: data.question,
+    graphContext: data.graphContext,
+  });
 }
 
 export async function getRagChat(

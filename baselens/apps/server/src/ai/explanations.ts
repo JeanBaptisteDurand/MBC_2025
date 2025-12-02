@@ -73,37 +73,42 @@ Be specific and actionable in your notes.`;
 
 /**
  * Generate a global summary for an analysis
+ * Skips EOA (wallets) from the summary
  */
 export async function generateAnalysisSummary(analysisId: string): Promise<AnalysisSummary> {
   logger.info(`[AI] ========================================`);
   logger.info(`[AI] GENERATING ANALYSIS SUMMARY`);
   logger.info(`[AI] Analysis ID: ${analysisId}`);
   logger.info(`[AI] ========================================`);
-  
+
   // Fetch analysis data
   logger.info(`[AI] Fetching analysis data from database...`);
-  const [analysis, contracts] = await Promise.all([
+  const [analysis, allContracts] = await Promise.all([
     prisma.analysis.findUnique({ where: { id: analysisId } }),
     prisma.contract.findMany({
       where: { analysisId },
       include: { analysis: true },
     }),
   ]);
-  
+
   if (!analysis) {
     logger.error(`[AI] ❌ Analysis not found: ${analysisId}`);
     throw new Error(`Analysis not found: ${analysisId}`);
   }
-  
-  logger.info(`[AI] Found ${contracts.length} contracts in analysis`);
-  
+
+  // Filter out EOA (wallets) - only include contracts with actual code
+  const contracts = allContracts.filter(c => c.kindOnChain !== "EOA");
+  const skippedEOA = allContracts.length - contracts.length;
+
+  logger.info(`[AI] Found ${allContracts.length} total, ${contracts.length} contracts for summary (skipped ${skippedEOA} EOA wallets)`);
+
   // Build context
   const contractsContext = contracts.map((c) => {
     return `- ${c.name || "Unknown"} (${c.address}): ${c.kindOnChain}${c.verified ? " [verified]" : c.sourceType === "decompiled" ? " [decompiled]" : ""}`;
   }).join("\n");
-  
+
   logger.debug(`[AI] Contracts context:\n${contractsContext}`);
-  
+
   // Get source snippets (truncated)
   const sourceSnippets: string[] = [];
   for (const contract of contracts.slice(0, 5)) { // Limit to first 5 contracts
@@ -113,40 +118,40 @@ export async function generateAnalysisSummary(analysisId: string): Promise<Analy
       logger.debug(`[AI] Added source snippet for ${contract.name || contract.address} (${snippet.length} chars)`);
     }
   }
-  
+
   // Generate summary
   logger.info(`[AI] Step 1: Generating global summary...`);
   const summaryPrompt = GLOBAL_SUMMARY_PROMPT
     .replace("{contracts}", contractsContext)
     .replace("{sources}", sourceSnippets.join("\n\n") || "No source code available");
-  
+
   const summary = await chatCompletion([
     { role: "system", content: SYSTEM_PROMPT },
     { role: "user", content: summaryPrompt },
   ]);
-  
+
   logger.info(`[AI] ✅ Global summary generated (${summary.length} chars)`);
-  
+
   // Generate security notes
   logger.info(`[AI] Step 2: Generating security notes...`);
   const securityPrompt = SECURITY_NOTES_PROMPT.replace("{analysisContext}", summary);
-  
+
   const securityNotes = await chatCompletion([
     { role: "system", content: SYSTEM_PROMPT },
     { role: "user", content: securityPrompt },
   ], { maxTokens: 1000 });
-  
+
   logger.info(`[AI] ✅ Security notes generated (${securityNotes.length} chars)`);
-  
+
   // Generate ultra summary
   logger.info(`[AI] Step 3: Generating ultra summary...`);
   const ultraSummary = await chatCompletion([
     { role: "system", content: "Summarize the following in 1-2 sentences:" },
     { role: "user", content: summary },
   ], { maxTokens: 100 });
-  
+
   logger.info(`[AI] ✅ Ultra summary generated (${ultraSummary.length} chars)`);
-  
+
   // Save to database
   logger.info(`[AI] Saving summary to database...`);
   await prisma.globalAnalysisSummary.upsert({
@@ -163,64 +168,205 @@ export async function generateAnalysisSummary(analysisId: string): Promise<Analy
       ultraSummary,
     },
   });
-  
+
   logger.info(`[AI] ✅ Summary saved to GlobalAnalysisSummary table`);
   logger.info(`[AI] ========================================`);
   logger.info(`[AI] SUMMARY GENERATION COMPLETE`);
   logger.info(`[AI] ========================================`);
-  
+
   return { summary, securityNotes, ultraSummary };
 }
 
 /**
  * Generate explanation for a specific contract
+ * If forceRegenerate is false, will return cached explanation if available and source type hasn't changed
  */
 export async function generateContractExplanation(
   analysisId: string,
-  address: string
+  address: string,
+  forceRegenerate: boolean = false
 ): Promise<string> {
   logger.info(`[AI] Generating explanation for contract ${address}...`);
-  
+
   const contract = await prisma.contract.findFirst({
     where: {
       analysisId,
       address: address.toLowerCase(),
     },
   });
-  
+
   if (!contract) {
     logger.error(`[AI] ❌ Contract not found: ${address}`);
     throw new Error(`Contract not found: ${address}`);
   }
-  
+
   logger.info(`[AI] Contract: ${contract.name || "Unknown"}, type: ${contract.kindOnChain}`);
   logger.info(`[AI] Source: ${contract.verified ? "verified" : contract.sourceType}`);
-  
+
+  // Check if we have a cached explanation and source type hasn't changed
+  if (!forceRegenerate && contract.aiExplanation && contract.aiExplanationSourceType === contract.sourceType) {
+    logger.info(`[AI] ✅ Returning cached explanation (${contract.aiExplanation.length} chars)`);
+    return contract.aiExplanation;
+  }
+
+  // Check if source type has upgraded (from none/decompiled to verified)
+  const sourceUpgraded = contract.aiExplanationSourceType &&
+    (contract.aiExplanationSourceType === "none" || contract.aiExplanationSourceType === "decompiled") &&
+    contract.sourceType === "verified";
+
+  if (sourceUpgraded) {
+    logger.info(`[AI] 🔄 Source upgraded from ${contract.aiExplanationSourceType} to ${contract.sourceType}, regenerating explanation...`);
+  }
+
   const sourceInfo = contract.verified
     ? "Source: Verified on Basescan"
     : contract.sourceType === "decompiled"
       ? "Source: Decompiled (Panoramix)"
       : "Source: Not available";
-  
-  const sourceCode = contract.sourceCode
-    ? truncateToTokens(contract.sourceCode, 3000)
-    : "Source code not available";
-  
+
+  // Build context based on what we have
+  let codeContext = "";
+  if (contract.sourceCode) {
+    codeContext = truncateToTokens(contract.sourceCode, 3000);
+  } else if (contract.abiJson) {
+    // If no source code, use ABI for context
+    const abiStr = JSON.stringify(contract.abiJson, null, 2);
+    codeContext = `ABI (no source code available):\n${truncateToTokens(abiStr, 2000)}`;
+  } else {
+    codeContext = "No source code or ABI available";
+  }
+
+  // Add noSource context if applicable
+  let additionalContext = "";
+  if (contract.noSource) {
+    additionalContext = "\n\nNote: Decompilation failed for this contract. The decompiler could not extract meaningful code.";
+    if (contract.decompileError) {
+      additionalContext += `\nDecompiler output: ${truncateToTokens(contract.decompileError, 500)}`;
+    }
+  }
+
   const prompt = CONTRACT_EXPLANATION_PROMPT
     .replace("{name}", contract.name || "Unknown")
     .replace("{address}", contract.address)
     .replace("{kindOnChain}", contract.kindOnChain)
     .replace("{sourceInfo}", sourceInfo)
-    .replace("{sourceCode}", sourceCode);
-  
+    .replace("{sourceCode}", codeContext + additionalContext);
+
   const explanation = await chatCompletion([
     { role: "system", content: SYSTEM_PROMPT },
     { role: "user", content: prompt },
   ]);
-  
-  logger.info(`[AI] ✅ Contract explanation generated (${explanation.length} chars)`);
-  
+
+  // Save the explanation to the database
+  await prisma.contract.update({
+    where: {
+      analysisId_address: {
+        analysisId,
+        address: contract.address,
+      },
+    },
+    data: {
+      aiExplanation: explanation,
+      aiExplanationSourceType: contract.sourceType,
+    },
+  });
+
+  logger.info(`[AI] ✅ Contract explanation generated and cached (${explanation.length} chars)`);
+
   return explanation;
+}
+
+/**
+ * Generate AI explanations for all contracts in an analysis
+ * This is called during the analysis process to pre-generate all explanations
+ * Skips EOA (wallets) and uses parallel processing for speed
+ */
+export async function generateAllContractExplanations(analysisId: string): Promise<void> {
+  logger.info(`[AI] ========================================`);
+  logger.info(`[AI] GENERATING ALL CONTRACT EXPLANATIONS`);
+  logger.info(`[AI] Analysis ID: ${analysisId}`);
+  logger.info(`[AI] ========================================`);
+
+  const contracts = await prisma.contract.findMany({
+    where: { analysisId },
+    select: {
+      address: true,
+      name: true,
+      kindOnChain: true,
+      sourceType: true,
+      aiExplanation: true,
+      aiExplanationSourceType: true,
+    },
+  });
+
+  // Filter out EOA (wallets) - only process contracts with actual code
+  const contractsToProcess = contracts.filter(c => c.kindOnChain !== "EOA");
+  const skippedEOA = contracts.length - contractsToProcess.length;
+
+  logger.info(`[AI] Found ${contracts.length} total, ${contractsToProcess.length} contracts to process (skipped ${skippedEOA} EOA wallets)`);
+
+  // Separate contracts that need generation vs already cached
+  const needsGeneration: typeof contractsToProcess = [];
+  let cached = 0;
+
+  for (const contract of contractsToProcess) {
+    if (contract.aiExplanation && contract.aiExplanationSourceType === contract.sourceType) {
+      logger.debug(`[AI] Skipping ${contract.address.slice(0, 10)}... (already has explanation)`);
+      cached++;
+    } else {
+      needsGeneration.push(contract);
+    }
+  }
+
+  logger.info(`[AI] ${needsGeneration.length} contracts need AI explanation, ${cached} already cached`);
+
+  if (needsGeneration.length === 0) {
+    logger.info(`[AI] ✅ All contracts already have explanations`);
+    return;
+  }
+
+  // Process in parallel batches to speed up while avoiding rate limits
+  const BATCH_SIZE = 5; // Process 5 contracts at a time
+  let generated = 0;
+  let errors = 0;
+
+  for (let i = 0; i < needsGeneration.length; i += BATCH_SIZE) {
+    const batch = needsGeneration.slice(i, i + BATCH_SIZE);
+    const batchNum = Math.floor(i / BATCH_SIZE) + 1;
+    const totalBatches = Math.ceil(needsGeneration.length / BATCH_SIZE);
+
+    logger.info(`[AI] Processing batch ${batchNum}/${totalBatches} (${batch.length} contracts)...`);
+
+    // Process batch in parallel
+    const results = await Promise.allSettled(
+      batch.map(async (contract) => {
+        logger.info(`[AI] Generating explanation for ${contract.name || contract.address.slice(0, 10)}...`);
+        return generateContractExplanation(analysisId, contract.address);
+      })
+    );
+
+    // Count results
+    for (let j = 0; j < results.length; j++) {
+      const result = results[j];
+      const contract = batch[j];
+      if (result.status === "fulfilled") {
+        generated++;
+      } else {
+        logger.error(`[AI] ❌ Failed to generate explanation for ${contract.address}:`, result.reason);
+        errors++;
+      }
+    }
+
+    // Small delay between batches to avoid rate limiting
+    if (i + BATCH_SIZE < needsGeneration.length) {
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+  }
+
+  logger.info(`[AI] ========================================`);
+  logger.info(`[AI] CONTRACT EXPLANATIONS COMPLETE`);
+  logger.info(`[AI] Generated: ${generated}, Cached: ${cached}, Skipped EOA: ${skippedEOA}, Errors: ${errors}`);
+  logger.info(`[AI] ========================================`);
 }
 
 // ============================================
@@ -229,24 +375,29 @@ export async function generateContractExplanation(
 
 /**
  * Index analysis content for RAG
+ * Skips EOA (wallets) and uses parallel processing for speed
  */
 export async function indexAnalysisForRag(analysisId: string): Promise<void> {
   logger.info(`[AI] ========================================`);
   logger.info(`[AI] INDEXING ANALYSIS FOR RAG`);
   logger.info(`[AI] Analysis ID: ${analysisId}`);
   logger.info(`[AI] ========================================`);
-  
+
   // Fetch all relevant content
   logger.info(`[AI] Fetching content to index...`);
   const [contracts, summary] = await Promise.all([
     prisma.contract.findMany({ where: { analysisId } }),
     prisma.globalAnalysisSummary.findUnique({ where: { analysisId } }),
   ]);
-  
-  logger.info(`[AI] Found ${contracts.length} contracts, summary: ${summary ? "YES" : "NO"}`);
-  
+
+  // Filter out EOA (wallets) - only index contracts with actual code
+  const contractsToIndex = contracts.filter(c => c.kindOnChain !== "EOA");
+  const skippedEOA = contracts.length - contractsToIndex.length;
+
+  logger.info(`[AI] Found ${contracts.length} total, ${contractsToIndex.length} contracts to index (skipped ${skippedEOA} EOA wallets), summary: ${summary ? "YES" : "NO"}`);
+
   const documents: { kind: string; refId: string; content: string }[] = [];
-  
+
   // Add global summary
   if (summary) {
     documents.push({
@@ -256,69 +407,87 @@ export async function indexAnalysisForRag(analysisId: string): Promise<void> {
     });
     logger.info(`[AI] Added global summary to index (${summary.summary.length + summary.securityNotes.length} chars)`);
   }
-  
-  // Add contract documents
-  for (const contract of contracts) {
+
+  // Add contract documents (excluding EOA)
+  for (const contract of contractsToIndex) {
     const parts: string[] = [];
     parts.push(`Contract: ${contract.name || "Unknown"}`);
     parts.push(`Address: ${contract.address}`);
     parts.push(`Type: ${contract.kindOnChain}`);
     parts.push(`Verified: ${contract.verified}`);
-    
+
     if (contract.sourceCode) {
       // Truncate source code for embedding
       const truncatedSource = truncateToTokens(contract.sourceCode, 2000);
       parts.push(`\nSource Code:\n${truncatedSource}`);
     }
-    
+
     documents.push({
       kind: "contract",
       refId: contract.address,
       content: parts.join("\n"),
     });
-    
+
     logger.debug(`[AI] Added contract ${contract.address.slice(0, 10)}... to index`);
   }
-  
+
   logger.info(`[AI] Prepared ${documents.length} documents for indexing`);
-  
-  // Create embeddings and store documents
+
+  // Process in parallel batches for speed
+  const BATCH_SIZE = 5;
   let successCount = 0;
   let errorCount = 0;
-  
-  for (let i = 0; i < documents.length; i++) {
-    const doc = documents[i];
-    logger.info(`[AI] Indexing document ${i + 1}/${documents.length}: ${doc.kind}:${doc.refId.slice(0, 20)}...`);
-    
-    try {
-      // Create the document first
-      const ragDoc = await prisma.ragDocument.create({
-        data: {
-          analysisId,
-          kind: doc.kind,
-          refId: doc.refId,
-          content: doc.content,
-        },
-      });
-      
-      logger.debug(`[AI] Created RagDocument: ${ragDoc.id}`);
-      
-      // Create and store embedding
-      const embedding = await createEmbedding(doc.content);
-      await storeEmbedding(ragDoc.id, embedding);
-      
-      logger.info(`[AI] ✅ Document indexed with ${embedding.length}-dim embedding`);
-      successCount++;
-      
-    } catch (error) {
-      logger.error(`[AI] ❌ Failed to index document ${doc.refId}:`, error);
-      errorCount++;
+
+  for (let i = 0; i < documents.length; i += BATCH_SIZE) {
+    const batch = documents.slice(i, i + BATCH_SIZE);
+    const batchNum = Math.floor(i / BATCH_SIZE) + 1;
+    const totalBatches = Math.ceil(documents.length / BATCH_SIZE);
+
+    logger.info(`[AI] Indexing batch ${batchNum}/${totalBatches} (${batch.length} documents)...`);
+
+    // Process batch in parallel
+    const results = await Promise.allSettled(
+      batch.map(async (doc) => {
+        // Create the document first
+        const ragDoc = await prisma.ragDocument.create({
+          data: {
+            analysisId,
+            kind: doc.kind,
+            refId: doc.refId,
+            content: doc.content,
+          },
+        });
+
+        // Create and store embedding
+        const embedding = await createEmbedding(doc.content);
+        await storeEmbedding(ragDoc.id, embedding);
+
+        return ragDoc.id;
+      })
+    );
+
+    // Count results
+    for (let j = 0; j < results.length; j++) {
+      const result = results[j];
+      const doc = batch[j];
+      if (result.status === "fulfilled") {
+        successCount++;
+        logger.debug(`[AI] ✅ Indexed ${doc.kind}:${doc.refId.slice(0, 10)}...`);
+      } else {
+        errorCount++;
+        logger.error(`[AI] ❌ Failed to index ${doc.refId}:`, result.reason);
+      }
+    }
+
+    // Small delay between batches to avoid rate limiting
+    if (i + BATCH_SIZE < documents.length) {
+      await new Promise(resolve => setTimeout(resolve, 500));
     }
   }
-  
+
   logger.info(`[AI] ========================================`);
   logger.info(`[AI] RAG INDEXING COMPLETE`);
-  logger.info(`[AI] Success: ${successCount}, Errors: ${errorCount}`);
+  logger.info(`[AI] Success: ${successCount}, Errors: ${errorCount}, Skipped EOA: ${skippedEOA}`);
   logger.info(`[AI] ========================================`);
 }
 
@@ -327,11 +496,11 @@ export async function indexAnalysisForRag(analysisId: string): Promise<void> {
  */
 export async function getAnalysisSummary(analysisId: string): Promise<AnalysisSummary | null> {
   logger.info(`[AI] Getting summary for analysis ${analysisId}...`);
-  
+
   const existing = await prisma.globalAnalysisSummary.findUnique({
     where: { analysisId },
   });
-  
+
   if (existing) {
     logger.info(`[AI] ✅ Found existing summary in database`);
     return {
@@ -340,9 +509,9 @@ export async function getAnalysisSummary(analysisId: string): Promise<AnalysisSu
       ultraSummary: existing.ultraSummary,
     };
   }
-  
+
   logger.info(`[AI] No existing summary, generating new one...`);
-  
+
   // Generate if not exists
   try {
     return await generateAnalysisSummary(analysisId);

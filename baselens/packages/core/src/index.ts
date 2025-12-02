@@ -261,10 +261,29 @@ export interface RagChatMessage {
   createdAt: string;
 }
 
+/** Graph context sent with RAG chat for better AI understanding */
+export interface RagGraphContext {
+  /** Active nodes visible on the graph */
+  visibleNodes?: {
+    id: string;
+    kind: string;
+    name?: string;
+    address?: string;
+  }[];
+  /** Edges showing relationships between nodes */
+  edges?: {
+    kind: string;
+    from: string;
+    to: string;
+  }[];
+}
+
 export interface RagChatRequest {
   analysisId: string;
   chatId?: string;
   question: string;
+  /** Graph context for better AI understanding */
+  graphContext?: RagGraphContext;
 }
 
 export interface RagChatResponse {

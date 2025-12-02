@@ -1,0 +1,30 @@
+{
+  "name": "baselens",
+  "version": "1.0.0",
+  "private": true,
+  "description": "BaseLens - Blockchain analysis tool for Base L2",
+  "scripts": {
+    "dev": "pnpm -C apps/server dev & pnpm -C apps/web dev",
+    "dev:server": "pnpm -C apps/server dev",
+    "dev:web": "pnpm -C apps/web dev",
+    "build": "pnpm -r build",
+    "build:server": "pnpm -C apps/server build",
+    "build:web": "pnpm -C apps/web build",
+    "db:generate": "pnpm -C apps/server db:generate",
+    "db:push": "pnpm -C apps/server db:push",
+    "db:migrate": "pnpm -C apps/server db:migrate",
+    "db:studio": "pnpm -C apps/server db:studio",
+    "lint": "pnpm -r lint",
+    "clean": "pnpm -r clean",
+    "docker:up": "docker-compose up -d",
+    "docker:down": "docker-compose down",
+    "docker:build": "docker-compose build",
+    "docker:logs": "docker-compose logs -f"
+  },
+  "engines": {
+    "node": ">=20.0.0",
+    "pnpm": ">=9.0.0"
+  },
+  "packageManager": "pnpm@9.15.0"
+}
+

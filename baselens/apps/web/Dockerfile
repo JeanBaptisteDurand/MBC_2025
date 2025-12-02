@@ -4,6 +4,14 @@ FROM node:20-slim AS base
 # Install pnpm
 RUN npm install -g pnpm@9
 
+# Install build dependencies for native modules
+RUN apt-get update && apt-get install -y \
+	python3 \
+	make \
+	g++ \
+	&& rm -rf /var/lib/apt/lists/*
+
+
 WORKDIR /app
 
 # Copy package files

@@ -61,7 +61,8 @@ export type EdgeKind =
   | "IMPLEMENTS_INTERFACE"
   | "EXTENDS_CONTRACT"
   | "USES_LIBRARY"
-  | "USES_TYPE_INTERFACE";
+  | "USES_TYPE_INTERFACE"
+  | "REFERENCES_ADDRESS"; // Hardcoded address found in source code
 
 // ============================================
 // Node Types
@@ -88,6 +89,17 @@ export interface ContractTags {
   isMinimalProxy?: boolean;
   proxyAdmin?: string;
   implementationAddress?: string;
+  // Basescan metadata
+  proxyFlag?: "0" | "1";
+  swarmSource?: string;
+  compilerVersion?: string;
+  optimizationUsed?: string;
+  runs?: string;
+  evmVersion?: string;
+  library?: string;
+  licenseType?: string;
+  // Error tracking
+  decompileError?: string;
 }
 
 export interface SourceFileNode {
@@ -286,7 +298,7 @@ export interface AbiParameter {
   components?: AbiParameter[];
 }
 
-export type AbiItem = AbiFunction | AbiEvent | { type: string; [key: string]: unknown };
+export type AbiItem = AbiFunction | AbiEvent | { type: string;[key: string]: unknown };
 
 // ============================================
 // API Request/Response Types
@@ -352,6 +364,7 @@ export const EDGE_COLORS: Record<EdgeKind, string> = {
   EXTENDS_CONTRACT: "#f43f5e", // rose
   USES_LIBRARY: "#14b8a6", // teal
   USES_TYPE_INTERFACE: "#a855f7", // violet
+  REFERENCES_ADDRESS: "#64748b", // slate - for hardcoded address references
 };
 
 export const NODE_COLORS = {

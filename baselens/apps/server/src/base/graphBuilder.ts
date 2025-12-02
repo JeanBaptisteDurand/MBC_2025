@@ -14,6 +14,7 @@ import type {
   ContractKindOnChain,
   TypeDefKind,
   GraphStats,
+  ContractTags,
 } from "@baselens/core";
 import { prisma } from "../db/prismaClient.js";
 import { logger } from "../logger.js";
@@ -26,9 +27,9 @@ export async function buildGraphData(analysisId: string): Promise<GraphData> {
   logger.info(`[GraphBuilder] BUILDING GRAPH DATA`);
   logger.info(`[GraphBuilder] Analysis ID: ${analysisId}`);
   logger.info(`[GraphBuilder] ========================================`);
-  
+
   const startTime = Date.now();
-  
+
   // Fetch all data in parallel
   logger.info(`[GraphBuilder] Fetching data from database...`);
   const [analysis, contracts, sourceFiles, typeDefs, edges] = await Promise.all([
@@ -38,22 +39,22 @@ export async function buildGraphData(analysisId: string): Promise<GraphData> {
     prisma.typeDef.findMany({ where: { analysisId } }),
     prisma.edge.findMany({ where: { analysisId } }),
   ]);
-  
+
   logger.info(`[GraphBuilder] Data fetched:`);
   logger.info(`[GraphBuilder]   - Contracts: ${contracts.length}`);
   logger.info(`[GraphBuilder]   - Source files: ${sourceFiles.length}`);
   logger.info(`[GraphBuilder]   - Type definitions: ${typeDefs.length}`);
   logger.info(`[GraphBuilder]   - Edges: ${edges.length}`);
-  
+
   if (!analysis) {
     logger.error(`[GraphBuilder] ❌ Analysis not found: ${analysisId}`);
     throw new Error(`Analysis not found: ${analysisId}`);
   }
-  
+
   const nodes: Node[] = [];
   const graphEdges: Edge[] = [];
   const nodeIds = new Set<string>();
-  
+
   // Track stats
   const stats: GraphStats = {
     totalContracts: 0,
@@ -63,19 +64,39 @@ export async function buildGraphData(analysisId: string): Promise<GraphData> {
     verifiedContracts: 0,
     decompiledContracts: 0,
   };
-  
+
   // ============================================
   // Build contract nodes
   // ============================================
-  
+
   logger.info(`[GraphBuilder] Building contract nodes...`);
-  
+
   for (const contract of contracts) {
     const nodeId = `contract:${contract.address}` as const;
     nodeIds.add(nodeId);
-    
-    const tags = contract.tagsJson as Record<string, unknown> | null;
-    
+
+    // Build comprehensive tags from all metadata
+    const existingTags = (contract.tagsJson as Record<string, unknown> | null) || {};
+    const tags: ContractTags = {
+      ...existingTags,
+      // Add new metadata to tags
+      proxyFlag: (contract.proxyFlag as "0" | "1") || existingTags.proxyFlag as ContractTags["proxyFlag"],
+      implementationAddress: contract.implementationAddress || existingTags.implementationAddress as string | undefined,
+      swarmSource: contract.swarmSource || existingTags.swarmSource as string | undefined,
+      compilerVersion: contract.compilerVersion || existingTags.compilerVersion as string | undefined,
+      optimizationUsed: contract.optimizationUsed || existingTags.optimizationUsed as string | undefined,
+      runs: contract.runs || existingTags.runs as string | undefined,
+      evmVersion: contract.evmVersion || existingTags.evmVersion as string | undefined,
+      library: contract.library || existingTags.library as string | undefined,
+      licenseType: contract.licenseType || existingTags.licenseType as string | undefined,
+      decompileError: contract.decompileError || existingTags.decompileError as string | undefined,
+    };
+
+    // Determine if this is a factory contract based on edges
+    const isFactory = edges.some(
+      (e) => e.fromNodeId === nodeId && e.kind === "CREATED"
+    );
+
     const contractNode: ContractNode = {
       kind: "contract",
       id: nodeId,
@@ -83,17 +104,17 @@ export async function buildGraphData(analysisId: string): Promise<GraphData> {
       name: contract.name || undefined,
       isRoot: contract.address === analysis.rootAddress.toLowerCase(),
       kindOnChain: contract.kindOnChain as ContractKindOnChain,
-      isFactory: Boolean(tags?.isFactory),
+      isFactory: isFactory || Boolean(tags.isFactory),
       verified: contract.verified,
       sourceType: contract.sourceType as "verified" | "decompiled" | "none",
       creatorAddress: contract.creatorAddress || undefined,
       creationTxHash: contract.creationTxHash || undefined,
-      tags: tags as ContractNode["tags"],
+      tags,
     };
-    
+
     nodes.push(contractNode);
     stats.totalContracts++;
-    
+
     if (contract.kindOnChain === "PROXY") {
       stats.totalProxies++;
     }
@@ -102,20 +123,20 @@ export async function buildGraphData(analysisId: string): Promise<GraphData> {
     } else if (contract.sourceType === "decompiled") {
       stats.decompiledContracts++;
     }
-    
-    logger.debug(`[GraphBuilder]   Contract: ${contract.address.slice(0, 10)}... (${contract.kindOnChain}, ${contract.sourceType})`);
+
+    logger.debug(`[GraphBuilder]   Contract: ${contract.address.slice(0, 10)}... (${contract.kindOnChain}, ${contract.sourceType}, verified: ${contract.verified})`);
   }
-  
+
   // ============================================
   // Build source file nodes
   // ============================================
-  
+
   logger.info(`[GraphBuilder] Building source file nodes...`);
-  
+
   for (const sourceFile of sourceFiles) {
     const nodeId = `source:${sourceFile.contractAddress}:${sourceFile.path}` as `source:${string}`;
     nodeIds.add(nodeId);
-    
+
     const sourceNode: SourceFileNode = {
       kind: "sourceFile",
       id: nodeId,
@@ -123,19 +144,19 @@ export async function buildGraphData(analysisId: string): Promise<GraphData> {
       path: sourceFile.path,
       sourceType: sourceFile.sourceType as "verified" | "decompiled",
     };
-    
+
     nodes.push(sourceNode);
     stats.totalSourceFiles++;
-    
+
     logger.debug(`[GraphBuilder]   Source: ${sourceFile.path} (${sourceFile.sourceType})`);
   }
-  
+
   // ============================================
   // Build type definition nodes
   // ============================================
-  
+
   logger.info(`[GraphBuilder] Building type definition nodes...`);
-  
+
   // Build a map of sourceFile.id -> path for lookup
   const sourceFileIdToPath = new Map<string, string>();
   const sourceFileIdToAddress = new Map<string, string>();
@@ -143,14 +164,14 @@ export async function buildGraphData(analysisId: string): Promise<GraphData> {
     sourceFileIdToPath.set(sf.id, sf.path);
     sourceFileIdToAddress.set(sf.id, sf.contractAddress);
   }
-  
+
   for (const typeDef of typeDefs) {
     const contractAddress = sourceFileIdToAddress.get(typeDef.sourceFileId) || "";
     const path = sourceFileIdToPath.get(typeDef.sourceFileId) || "";
     const sourceFileNodeId = `source:${contractAddress}:${path}` as `source:${string}`;
     const nodeId = `typedef:${contractAddress}:${typeDef.name}` as `typedef:${string}`;
     nodeIds.add(nodeId);
-    
+
     const typeNode: TypeDefNode = {
       kind: "typeDef",
       id: nodeId,
@@ -160,22 +181,22 @@ export async function buildGraphData(analysisId: string): Promise<GraphData> {
       isRootContractType: typeDef.isRootContractType,
       sourceFileId: sourceFileNodeId,
     };
-    
+
     nodes.push(typeNode);
     stats.totalTypeDefs++;
-    
+
     logger.debug(`[GraphBuilder]   TypeDef: ${typeDef.name} (${typeDef.kind})`);
   }
-  
+
   // ============================================
-  // Build address nodes (for creators, etc.)
+  // Build address nodes (for creators, referenced addresses, etc.)
   // ============================================
-  
+
   logger.info(`[GraphBuilder] Building address nodes...`);
-  
+
   // Collect all referenced addresses that aren't contracts
   const addressRefs = new Set<string>();
-  
+
   for (const edge of edges) {
     if (edge.toNodeId.startsWith("address:")) {
       const address = edge.toNodeId.replace("address:", "");
@@ -186,43 +207,79 @@ export async function buildGraphData(analysisId: string): Promise<GraphData> {
       addressRefs.add(address);
     }
   }
-  
+
+  // Also add creator addresses that are not contracts
+  for (const contract of contracts) {
+    if (contract.creatorAddress) {
+      const creatorLower = contract.creatorAddress.toLowerCase();
+      const creatorIsContract = contracts.some((c) => c.address === creatorLower);
+      if (!creatorIsContract) {
+        addressRefs.add(creatorLower);
+      }
+    }
+  }
+
   for (const address of addressRefs) {
     const nodeId = `address:${address}` as `address:${string}`;
     if (!nodeIds.has(nodeId)) {
       nodeIds.add(nodeId);
-      
+
+      // Try to determine a label for this address
+      // For now, check if it's a known factory creator
+      const createdContracts = contracts.filter(
+        (c) => c.creatorAddress?.toLowerCase() === address
+      );
+
       const addressNode: AddressNode = {
         kind: "address",
         id: nodeId,
         address,
+        label: createdContracts.length > 0
+          ? `Factory/Deployer (${createdContracts.length} contracts)`
+          : undefined,
       };
-      
+
       nodes.push(addressNode);
-      logger.debug(`[GraphBuilder]   Address: ${address.slice(0, 10)}...`);
+      logger.debug(`[GraphBuilder]   Address: ${address.slice(0, 10)}... (${addressNode.label || "unknown"})`);
     }
   }
-  
+
   // ============================================
   // Build edges
   // ============================================
-  
+
   logger.info(`[GraphBuilder] Building edges...`);
-  
+
   let skippedEdges = 0;
-  
+  let addedEdges = 0;
+
+  // Track unique edges to avoid duplicates
+  const edgeKeys = new Set<string>();
+
   for (const edge of edges) {
-    // Only include edges where both nodes exist
-    // (some edges might reference types that we didn't create nodes for)
-    const fromExists = nodeIds.has(edge.fromNodeId) || !edge.fromNodeId.startsWith("typedef:");
-    const toExists = nodeIds.has(edge.toNodeId) || !edge.toNodeId.startsWith("typedef:");
-    
+    // Only include edges where at least one node exists
+    // For typedef edges, we skip if the source node doesn't exist
+    const fromExists = nodeIds.has(edge.fromNodeId) ||
+      !edge.fromNodeId.startsWith("typedef:") ||
+      edge.fromNodeId.startsWith("contract:") ||
+      edge.fromNodeId.startsWith("source:");
+
+    const toExists = nodeIds.has(edge.toNodeId) ||
+      !edge.toNodeId.startsWith("typedef:");
+
     if (!fromExists || !toExists) {
-      // Skip edges to/from missing nodes
+      // Skip edges to/from missing nodes (usually cross-contract type references)
       skippedEdges++;
       continue;
     }
-    
+
+    // Create unique key to prevent duplicates
+    const edgeKey = `${edge.fromNodeId}--${edge.kind}--${edge.toNodeId}`;
+    if (edgeKeys.has(edgeKey)) {
+      continue;
+    }
+    edgeKeys.add(edgeKey);
+
     const graphEdge: Edge = {
       id: edge.id,
       from: edge.fromNodeId as Edge["from"],
@@ -230,22 +287,23 @@ export async function buildGraphData(analysisId: string): Promise<GraphData> {
       kind: edge.kind as EdgeKind,
       evidence: edge.evidenceJson as Edge["evidence"],
     };
-    
+
     graphEdges.push(graphEdge);
+    addedEdges++;
   }
-  
+
   if (skippedEdges > 0) {
     logger.warn(`[GraphBuilder] Skipped ${skippedEdges} edges with missing nodes`);
   }
-  
+
   const duration = Date.now() - startTime;
-  
+
   logger.info(`[GraphBuilder] ========================================`);
   logger.info(`[GraphBuilder] GRAPH BUILD COMPLETE`);
   logger.info(`[GraphBuilder] Duration: ${duration}ms`);
   logger.info(`[GraphBuilder] Stats:`);
   logger.info(`[GraphBuilder]   - Total nodes: ${nodes.length}`);
-  logger.info(`[GraphBuilder]   - Total edges: ${graphEdges.length}`);
+  logger.info(`[GraphBuilder]   - Total edges: ${addedEdges}`);
   logger.info(`[GraphBuilder]   - Contracts: ${stats.totalContracts}`);
   logger.info(`[GraphBuilder]   - Proxies: ${stats.totalProxies}`);
   logger.info(`[GraphBuilder]   - Verified: ${stats.verifiedContracts}`);
@@ -253,7 +311,7 @@ export async function buildGraphData(analysisId: string): Promise<GraphData> {
   logger.info(`[GraphBuilder]   - Source files: ${stats.totalSourceFiles}`);
   logger.info(`[GraphBuilder]   - Type defs: ${stats.totalTypeDefs}`);
   logger.info(`[GraphBuilder] ========================================`);
-  
+
   return {
     nodes,
     edges: graphEdges,
@@ -271,27 +329,112 @@ export async function getGraphSummary(analysisId: string): Promise<{
   proxyCount: number;
   verifiedCount: number;
   decompiledCount: number;
+  factoryCount: number;
 }> {
   logger.info(`[GraphBuilder] Getting graph summary for ${analysisId}...`);
-  
-  const [contracts, edgeCount] = await Promise.all([
+
+  const [contracts, edgeCount, sourceFileCount, typeDefCount] = await Promise.all([
     prisma.contract.findMany({
       where: { analysisId },
-      select: { kindOnChain: true, verified: true, sourceType: true },
+      select: {
+        kindOnChain: true,
+        verified: true,
+        sourceType: true,
+        tagsJson: true,
+      },
     }),
     prisma.edge.count({ where: { analysisId } }),
+    prisma.sourceFile.count({ where: { analysisId } }),
+    prisma.typeDef.count({ where: { analysisId } }),
   ]);
-  
+
+  const factoryCount = contracts.filter((c) => {
+    const tags = c.tagsJson as Record<string, unknown> | null;
+    return tags?.isFactory === true;
+  }).length;
+
   const summary = {
-    nodeCount: contracts.length,
+    nodeCount: contracts.length + sourceFileCount + typeDefCount,
     edgeCount,
     contractCount: contracts.length,
     proxyCount: contracts.filter((c) => c.kindOnChain === "PROXY").length,
     verifiedCount: contracts.filter((c) => c.verified).length,
     decompiledCount: contracts.filter((c) => c.sourceType === "decompiled").length,
+    factoryCount,
   };
-  
-  logger.info(`[GraphBuilder] ✅ Summary: ${summary.nodeCount} nodes, ${summary.edgeCount} edges`);
-  
+
+  logger.info(`[GraphBuilder] ✅ Summary: ${summary.nodeCount} nodes, ${summary.edgeCount} edges, ${summary.factoryCount} factories`);
+
   return summary;
+}
+
+/**
+ * Get contract details including ABI for the right drawer
+ */
+export async function getContractDetails(
+  analysisId: string,
+  address: string
+): Promise<{
+  contract: {
+    address: string;
+    name?: string;
+    kindOnChain: string;
+    verified: boolean;
+    sourceType: string;
+    creatorAddress?: string;
+    creationTxHash?: string;
+    compilerVersion?: string;
+    optimizationUsed?: string;
+    evmVersion?: string;
+    tags?: Record<string, unknown>;
+  } | null;
+  abi?: unknown[];
+  sourceFiles: { path: string; sourceType: string; contentLength: number }[];
+}> {
+  const contract = await prisma.contract.findUnique({
+    where: {
+      analysisId_address: {
+        analysisId,
+        address: address.toLowerCase(),
+      },
+    },
+  });
+
+  if (!contract) {
+    return { contract: null, sourceFiles: [] };
+  }
+
+  const sourceFiles = await prisma.sourceFile.findMany({
+    where: {
+      analysisId,
+      contractAddress: address.toLowerCase(),
+    },
+    select: {
+      path: true,
+      sourceType: true,
+      content: true,
+    },
+  });
+
+  return {
+    contract: {
+      address: contract.address,
+      name: contract.name || undefined,
+      kindOnChain: contract.kindOnChain,
+      verified: contract.verified,
+      sourceType: contract.sourceType,
+      creatorAddress: contract.creatorAddress || undefined,
+      creationTxHash: contract.creationTxHash || undefined,
+      compilerVersion: contract.compilerVersion || undefined,
+      optimizationUsed: contract.optimizationUsed || undefined,
+      evmVersion: contract.evmVersion || undefined,
+      tags: contract.tagsJson as Record<string, unknown> | undefined,
+    },
+    abi: contract.abiJson as unknown[] | undefined,
+    sourceFiles: sourceFiles.map((sf) => ({
+      path: sf.path,
+      sourceType: sf.sourceType,
+      contentLength: sf.content.length,
+    })),
+  };
 }

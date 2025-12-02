@@ -47,19 +47,33 @@ model Analysis {
 // ============================================
 
 model Contract {
-  id             String  @id @default(uuid())
-  analysisId     String
-  address        String
-  name           String?
-  kindOnChain    String  @default("CONTRACT_SIMPLE") // "EOA" | "CONTRACT_SIMPLE" | "PROXY" | "IMPLEMENTATION"
-  network        String
-  verified       Boolean @default(false)
-  sourceType     String  @default("none") // "verified" | "decompiled" | "none"
-  tagsJson       Json?   // Classification flags
-  abiJson        Json?   // ABI if available
-  sourceCode     String? // Solidity or pseudo-Solidity
-  creatorAddress String?
-  creationTxHash String?
+  id                   String  @id @default(uuid())
+  analysisId           String
+  address              String
+  name                 String?
+  kindOnChain          String  @default("CONTRACT_SIMPLE") // "EOA" | "CONTRACT_SIMPLE" | "PROXY" | "IMPLEMENTATION"
+  network              String
+  verified             Boolean @default(false)
+  sourceType           String  @default("none") // "verified" | "decompiled" | "none"
+  tagsJson             Json?   // Classification flags
+  abiJson              Json?   // ABI if available
+  sourceCode           String? // Solidity or pseudo-Solidity
+  creatorAddress       String?
+  creationTxHash       String?
+  // New metadata fields from Basescan
+  compilerVersion      String?
+  optimizationUsed     String?
+  runs                 String?
+  evmVersion           String?
+  library              String?
+  licenseType          String?
+  constructorArguments String?
+  // Proxy-specific metadata
+  proxyFlag            String? // "0" or "1"
+  implementationAddress String?
+  swarmSource          String?
+  // Decompilation error tracking
+  decompileError       String?
 
   analysis Analysis @relation(fields: [analysisId], references: [id], onDelete: Cascade)
 

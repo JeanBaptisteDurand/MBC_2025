@@ -6,10 +6,18 @@ import type { Network, AbiItem } from "@baselens/core";
 import { config } from "../config.js";
 import { logger } from "../logger.js";
 
-// Basescan API base URLs
+// Basescan API V2 URLs (V1 is deprecated as of late 2024)
+// Using Etherscan V2 API with chainid parameter
+// See: https://docs.etherscan.io/v2-migration
 const BASESCAN_URLS = {
-  "base-mainnet": "https://api.basescan.org/api",
-  "base-sepolia": "https://api-sepolia.basescan.org/api",
+  "base-mainnet": "https://api.etherscan.io/v2/api",
+  "base-sepolia": "https://api.etherscan.io/v2/api",
+} as const;
+
+// Chain IDs for Base networks
+const CHAIN_IDS = {
+  "base-mainnet": "8453",
+  "base-sepolia": "84532",
 } as const;
 
 // ============================================
@@ -28,7 +36,7 @@ const callTimestamps: number[] = [];
  */
 async function waitForRateLimit(): Promise<void> {
   const now = Date.now();
-  
+
   // Ensure minimum delay between calls (500ms = max 2 per second)
   const timeSinceLastCall = now - lastCallTime;
   if (lastCallTime > 0 && timeSinceLastCall < MIN_DELAY_BETWEEN_CALLS_MS) {
@@ -36,32 +44,32 @@ async function waitForRateLimit(): Promise<void> {
     logger.info(`[Basescan] ⏳ Rate limit: waiting ${waitTime}ms (min delay between calls)`);
     await new Promise((resolve) => setTimeout(resolve, waitTime));
   }
-  
+
   // Also check sliding window (extra safety)
   const checkTime = Date.now();
   while (callTimestamps.length > 0 && callTimestamps[0] < checkTime - RATE_LIMIT_WINDOW_MS) {
     callTimestamps.shift();
   }
-  
+
   if (callTimestamps.length >= RATE_LIMIT_CALLS) {
     const oldestCall = callTimestamps[0];
     const waitTime = oldestCall + RATE_LIMIT_WINDOW_MS - checkTime + 50;
-    
+
     if (waitTime > 0) {
       logger.info(`[Basescan] ⏳ Rate limit: waiting ${waitTime}ms (${callTimestamps.length} calls in window)`);
       await new Promise((resolve) => setTimeout(resolve, waitTime));
     }
   }
-  
+
   // Record this call
   lastCallTime = Date.now();
   callTimestamps.push(lastCallTime);
-  
+
   // Keep only recent timestamps
   while (callTimestamps.length > 10) {
     callTimestamps.shift();
   }
-  
+
   logger.debug(`[Basescan] Rate limit: ${callTimestamps.length}/${RATE_LIMIT_CALLS} calls in last second`);
 }
 
@@ -97,6 +105,38 @@ interface ContractCreationResult {
   txHash: string;
 }
 
+// ============================================
+// Contract Source Info (Full metadata)
+// ============================================
+
+export interface ContractSourceInfo {
+  hasSource: boolean;
+  sourceCodeRaw?: string;
+  abiRaw?: string;
+  contractName?: string;
+  compilerVersion?: string;
+  optimizationUsed?: string;
+  runs?: string;
+  evmVersion?: string;
+  library?: string;
+  licenseType?: string;
+  constructorArguments?: string;
+  proxyFlag?: "0" | "1";
+  implementation?: string;
+  similarMatch?: string;
+  swarmSource?: string;
+}
+
+export interface ContractAbiResult {
+  hasAbi: boolean;
+  abiRaw?: string;
+}
+
+export interface ContractCreatorInfo {
+  creatorAddress?: string;
+  creationTxHash?: string;
+}
+
 /**
  * Make a request to Basescan API (with rate limiting)
  */
@@ -106,34 +146,39 @@ async function basescanRequest<T>(
 ): Promise<T | null> {
   // Wait for rate limit before making the request
   await waitForRateLimit();
-  
+
   const baseUrl = BASESCAN_URLS[network];
+  const chainId = CHAIN_IDS[network];
   const apiKey = config.BASESCAN_API_KEY;
-  
+
   const searchParams = new URLSearchParams({
     ...params,
+    chainid: chainId, // Required for V2 API
     apikey: apiKey || "",
   });
-  
+
   const url = `${baseUrl}?${searchParams.toString()}`;
   const action = params.action || "unknown";
-  
-  logger.info(`[Basescan] API call: ${params.module}/${action} for ${params.address || params.contractaddresses || "N/A"}`);
+
+  logger.info(`[Basescan] API V2 call: ${params.module}/${action} for ${params.address || params.contractaddresses || "N/A"} (chainId: ${chainId})`);
   logger.debug(`[Basescan] Full URL: ${url.replace(apiKey || "", "***API_KEY***")}`);
-  
+
   const startTime = Date.now();
-  
+
   try {
     const response = await fetch(url);
     const duration = Date.now() - startTime;
-    
+
     if (!response.ok) {
       logger.error(`[Basescan] ❌ HTTP error: ${response.status} ${response.statusText} (${duration}ms)`);
       return null;
     }
-    
+
     const data = (await response.json()) as BasescanResponse<T>;
-    
+
+    // Log raw response structure for debugging
+    logger.info(`[Basescan] API response status: "${data.status}", message: "${data.message}"`);
+
     if (data.status === "0") {
       // Check if it's a rate limit or actual error
       if (typeof data.result === "string" && data.result.includes("rate limit")) {
@@ -141,18 +186,28 @@ async function basescanRequest<T>(
         await new Promise((r) => setTimeout(r, 2000));
         return basescanRequest(network, params);
       }
-      
+
       // "Contract source code not verified" is expected for unverified contracts
       if (typeof data.result === "string" && data.result.includes("not verified")) {
         logger.info(`[Basescan] Contract not verified (${duration}ms)`);
         return null;
       }
-      
+
       logger.warn(`[Basescan] ⚠️ API returned status 0: ${data.message} - ${data.result} (${duration}ms)`);
       return null;
     }
-    
+
     logger.info(`[Basescan] ✅ ${action} success (${duration}ms)`);
+
+    // Log result type and size for debugging
+    if (Array.isArray(data.result)) {
+      logger.info(`[Basescan] Result is array with ${data.result.length} items`);
+    } else if (typeof data.result === "string") {
+      logger.info(`[Basescan] Result is string with ${data.result.length} chars`);
+    } else {
+      logger.info(`[Basescan] Result type: ${typeof data.result}`);
+    }
+
     return data.result as T;
   } catch (error) {
     const duration = Date.now() - startTime;
@@ -162,25 +217,25 @@ async function basescanRequest<T>(
 }
 
 /**
- * Get contract ABI from Basescan
+ * Get contract ABI from Basescan (parsed)
  */
 export async function getContractAbi(
   network: Network,
   address: string
 ): Promise<AbiItem[] | null> {
   logger.info(`[Basescan] Fetching ABI for ${address}...`);
-  
+
   const result = await basescanRequest<string>(network, {
     module: "contract",
     action: "getabi",
     address,
   });
-  
+
   if (!result) {
     logger.warn(`[Basescan] No ABI found for ${address}`);
     return null;
   }
-  
+
   try {
     const abi = JSON.parse(result) as AbiItem[];
     logger.info(`[Basescan] ✅ Parsed ABI with ${abi.length} items`);
@@ -189,6 +244,148 @@ export async function getContractAbi(
     logger.error(`[Basescan] ❌ Failed to parse ABI JSON for ${address}:`, e);
     return null;
   }
+}
+
+/**
+ * Get contract ABI only (raw string result) - for when no verified source but ABI exists
+ * This is used as fallback when getsourcecode doesn't return source
+ */
+export async function getContractAbiOnly(
+  network: Network,
+  address: string
+): Promise<ContractAbiResult> {
+  logger.info(`[Basescan] Fetching ABI-only for ${address}...`);
+
+  const result = await basescanRequest<string>(network, {
+    module: "contract",
+    action: "getabi",
+    address,
+  });
+
+  if (!result) {
+    logger.info(`[Basescan] No ABI available for ${address}`);
+    return { hasAbi: false };
+  }
+
+  // Check if it's a valid JSON ABI (not an error message)
+  try {
+    const parsed = JSON.parse(result);
+    if (Array.isArray(parsed) && parsed.length > 0) {
+      logger.info(`[Basescan] ✅ Found ABI-only with ${parsed.length} items`);
+      return { hasAbi: true, abiRaw: result };
+    }
+  } catch {
+    // Not valid JSON - probably an error message
+  }
+
+  logger.info(`[Basescan] ABI result was not a valid ABI array`);
+  return { hasAbi: false };
+}
+
+/**
+ * Get full contract source info with all metadata from getsourcecode
+ * This is the PREFERRED method - always try this first
+ */
+export async function getContractSourceInfo(
+  network: Network,
+  address: string
+): Promise<ContractSourceInfo> {
+  logger.info(`[Basescan] Fetching full source info for ${address}...`);
+
+  const result = await basescanRequest<SourceCodeResult[]>(network, {
+    module: "contract",
+    action: "getsourcecode",
+    address,
+  });
+
+  if (!result || result.length === 0) {
+    logger.info(`[Basescan] No source code result for ${address}`);
+    logger.info(`[Basescan] Result was: ${JSON.stringify(result)}`);
+    return { hasSource: false };
+  }
+
+  const data = result[0];
+
+  // Log raw response for debugging
+  logger.info(`[Basescan] Raw getsourcecode response for ${address}:`);
+  logger.info(`[Basescan]   - ContractName: "${data.ContractName || "(empty)"}"`);
+  logger.info(`[Basescan]   - SourceCode length: ${data.SourceCode?.length || 0} chars`);
+  logger.info(`[Basescan]   - SourceCode preview: "${(data.SourceCode || "").slice(0, 150)}${(data.SourceCode?.length || 0) > 150 ? "..." : ""}"`);
+  logger.info(`[Basescan]   - ABI preview: "${(data.ABI || "").slice(0, 100)}${(data.ABI?.length || 0) > 100 ? "..." : ""}"`);
+  logger.info(`[Basescan]   - Proxy: "${data.Proxy}"`);
+  logger.info(`[Basescan]   - Implementation: "${data.Implementation || "(none)"}"`);
+
+  // Check if source is verified - SourceCode must be non-empty and not just "{}"
+  const sourceCode = data.SourceCode?.trim();
+  const hasVerifiedSource = Boolean(
+    sourceCode &&
+    sourceCode !== "{}" &&
+    data.ABI !== "Contract source code not verified"
+  );
+
+  logger.info(`[Basescan] Verification check: sourceCode="${sourceCode?.slice(0, 50) || "(empty)"}", ABI check="${data.ABI !== "Contract source code not verified"}", hasVerifiedSource=${hasVerifiedSource}`);
+
+  if (!hasVerifiedSource) {
+    logger.info(`[Basescan] Contract ${address} is NOT verified (sourceCode empty: ${!sourceCode}, sourceCode is "{}": ${sourceCode === "{}"}, ABI says not verified: ${data.ABI === "Contract source code not verified"})`);
+    return { hasSource: false };
+  }
+
+  logger.info(`[Basescan] ✅ Contract ${address} IS verified: ${data.ContractName}`);
+  logger.debug(`[Basescan] Full metadata:`);
+  logger.debug(`[Basescan]   - Compiler: ${data.CompilerVersion}`);
+  logger.debug(`[Basescan]   - Optimization: ${data.OptimizationUsed} (${data.Runs} runs)`);
+  logger.debug(`[Basescan]   - EVM Version: ${data.EVMVersion}`);
+  logger.debug(`[Basescan]   - Proxy: ${data.Proxy}`);
+  logger.debug(`[Basescan]   - Implementation: ${data.Implementation || "N/A"}`);
+  logger.debug(`[Basescan]   - SwarmSource: ${data.SwarmSource || "N/A"}`);
+
+  return {
+    hasSource: true,
+    sourceCodeRaw: data.SourceCode,
+    abiRaw: data.ABI,
+    contractName: data.ContractName,
+    compilerVersion: data.CompilerVersion,
+    optimizationUsed: data.OptimizationUsed,
+    runs: data.Runs,
+    evmVersion: data.EVMVersion,
+    library: data.Library,
+    licenseType: data.LicenseType,
+    constructorArguments: data.ConstructorArguments,
+    proxyFlag: (data.Proxy === "1" ? "1" : "0") as "0" | "1",
+    implementation: data.Implementation || undefined,
+    swarmSource: data.SwarmSource || undefined,
+    // Note: similarMatch is not returned by Basescan API but may be in future
+  };
+}
+
+/**
+ * Get contract creator address and creation tx hash
+ * Returns info for a single address
+ */
+export async function getContractCreatorAndCreationTx(
+  network: Network,
+  address: string
+): Promise<ContractCreatorInfo> {
+  logger.info(`[Basescan] Fetching creator info for ${address}...`);
+
+  const data = await basescanRequest<ContractCreationResult[]>(network, {
+    module: "contract",
+    action: "getcontractcreation",
+    contractaddresses: address,
+  });
+
+  if (!data || data.length === 0) {
+    logger.info(`[Basescan] No creator info found for ${address}`);
+    return {};
+  }
+
+  const item = data[0];
+  logger.info(`[Basescan] ✅ Creator: ${item.contractCreator}, txHash: ${item.txHash}`);
+
+  return {
+    creatorAddress: item.contractCreator,
+    creationTxHash: item.txHash,
+  };
 }
 
 /**
@@ -207,20 +404,20 @@ export async function getContractSourceCode(
   implementationAddress: string | null;
 } | null> {
   logger.info(`[Basescan] Fetching source code for ${address}...`);
-  
+
   const result = await basescanRequest<SourceCodeResult[]>(network, {
     module: "contract",
     action: "getsourcecode",
     address,
   });
-  
+
   if (!result || result.length === 0) {
     logger.warn(`[Basescan] No source code result for ${address}`);
     return null;
   }
-  
+
   const data = result[0];
-  
+
   // Check if source is verified
   if (!data.SourceCode || data.ABI === "Contract source code not verified") {
     logger.info(`[Basescan] Contract ${address} is NOT verified`);
@@ -234,10 +431,10 @@ export async function getContractSourceCode(
       implementationAddress: null,
     };
   }
-  
+
   logger.info(`[Basescan] ✅ Contract ${address} IS verified: ${data.ContractName}`);
   logger.debug(`[Basescan] Compiler: ${data.CompilerVersion}, Proxy: ${data.Proxy}, Impl: ${data.Implementation || "N/A"}`);
-  
+
   // Parse ABI
   let abi: AbiItem[] = [];
   try {
@@ -246,10 +443,10 @@ export async function getContractSourceCode(
   } catch (e) {
     logger.warn(`[Basescan] Failed to parse ABI for ${address}:`, e);
   }
-  
+
   // Parse source files
   const sourceFiles: { path: string; content: string }[] = [];
-  
+
   // Check if source code is a JSON object (multi-file format)
   if (data.SourceCode.startsWith("{") || data.SourceCode.startsWith("{{")) {
     try {
@@ -258,9 +455,9 @@ export async function getContractSourceCode(
       if (sourceJson.startsWith("{{")) {
         sourceJson = sourceJson.slice(1, -1);
       }
-      
+
       const parsed = JSON.parse(sourceJson);
-      
+
       // Check for "sources" key (Solidity standard JSON input format)
       if (parsed.sources) {
         for (const [path, fileData] of Object.entries(parsed.sources)) {
@@ -296,7 +493,7 @@ export async function getContractSourceCode(
     });
     logger.info(`[Basescan] Single source file: ${data.ContractName || "Contract"}.sol (${data.SourceCode.length} chars)`);
   }
-  
+
   return {
     verified: true,
     contractName: data.ContractName,
@@ -316,27 +513,27 @@ export async function getContractCreation(
   addresses: string[]
 ): Promise<Map<string, { creator: string; txHash: string }>> {
   logger.info(`[Basescan] Fetching creation info for ${addresses.length} contracts...`);
-  
+
   const result = new Map<string, { creator: string; txHash: string }>();
-  
+
   // Basescan supports up to 5 addresses per request
   const chunks: string[][] = [];
   for (let i = 0; i < addresses.length; i += 5) {
     chunks.push(addresses.slice(i, i + 5));
   }
-  
+
   logger.debug(`[Basescan] Split into ${chunks.length} chunks of max 5 addresses`);
-  
+
   for (let i = 0; i < chunks.length; i++) {
     const chunk = chunks[i];
     logger.debug(`[Basescan] Fetching chunk ${i + 1}/${chunks.length}: ${chunk.join(", ")}`);
-    
+
     const data = await basescanRequest<ContractCreationResult[]>(network, {
       module: "contract",
       action: "getcontractcreation",
       contractaddresses: chunk.join(","),
     });
-    
+
     if (data) {
       for (const item of data) {
         result.set(item.contractAddress.toLowerCase(), {
@@ -347,7 +544,7 @@ export async function getContractCreation(
       }
     }
   }
-  
+
   logger.info(`[Basescan] ✅ Found creation info for ${result.size}/${addresses.length} contracts`);
   return result;
 }
@@ -378,14 +575,14 @@ export async function getProxyVerificationStatus(
   proxyType: string | null;
 } | null> {
   logger.info(`[Basescan] Checking proxy status for ${address}...`);
-  
+
   const sourceCode = await getContractSourceCode(network, address);
-  
+
   if (!sourceCode) {
     logger.warn(`[Basescan] No source code data for proxy check on ${address}`);
     return null;
   }
-  
+
   if (sourceCode.isProxy && sourceCode.implementationAddress) {
     logger.info(`[Basescan] ✅ ${address} IS a proxy -> implementation: ${sourceCode.implementationAddress}`);
     return {
@@ -394,7 +591,7 @@ export async function getProxyVerificationStatus(
       proxyType: "verified",
     };
   }
-  
+
   logger.info(`[Basescan] ${address} is NOT marked as proxy in Basescan`);
   return {
     isProxy: false,
@@ -416,25 +613,25 @@ export async function getProxyImplementationDetails(
   implementationVerified: boolean;
 } | null> {
   logger.info(`[Basescan] Fetching proxy implementation details for ${proxyAddress}...`);
-  
+
   const proxyStatus = await getProxyVerificationStatus(network, proxyAddress);
-  
+
   if (!proxyStatus || !proxyStatus.isProxy || !proxyStatus.implementationAddress) {
     logger.info(`[Basescan] ${proxyAddress} is not a proxy or has no implementation`);
     return null;
   }
-  
+
   // Get implementation contract details
   logger.info(`[Basescan] Fetching implementation ${proxyStatus.implementationAddress}...`);
   const implSource = await getContractSourceCode(network, proxyStatus.implementationAddress);
-  
+
   const result = {
     hasVerifiedImplementation: implSource?.verified ?? false,
     implementationAddress: proxyStatus.implementationAddress,
     implementationName: implSource?.contractName || null,
     implementationVerified: implSource?.verified ?? false,
   };
-  
+
   logger.info(`[Basescan] ✅ Proxy implementation: ${result.implementationName || "Unknown"}, verified: ${result.implementationVerified}`);
   return result;
 }
@@ -463,7 +660,7 @@ export async function getTransactionList(
   }[]
 > {
   logger.info(`[Basescan] Fetching transaction list for ${address}...`);
-  
+
   const result = await basescanRequest<
     {
       hash: string;
@@ -483,7 +680,7 @@ export async function getTransactionList(
     offset: String(options.offset ?? 100),
     sort: options.sort ?? "desc",
   });
-  
+
   const txList = result ?? [];
   logger.info(`[Basescan] ✅ Found ${txList.length} transactions`);
   return txList;
@@ -511,7 +708,7 @@ export async function getInternalTransactions(
   }[]
 > {
   logger.info(`[Basescan] Fetching internal transactions for ${address}...`);
-  
+
   const result = await basescanRequest<
     {
       hash: string;
@@ -529,7 +726,7 @@ export async function getInternalTransactions(
     page: String(options.page ?? 1),
     offset: String(options.offset ?? 100),
   });
-  
+
   const txList = result ?? [];
   logger.info(`[Basescan] ✅ Found ${txList.length} internal transactions`);
   return txList;
@@ -542,7 +739,7 @@ export function getBasescanUrl(network: Network, address: string): string {
   const baseUrl = network === "base-mainnet"
     ? "https://basescan.org"
     : "https://sepolia.basescan.org";
-  
+
   return `${baseUrl}/address/${address}`;
 }
 
@@ -553,6 +750,6 @@ export function getBasescanTxUrl(network: Network, txHash: string): string {
   const baseUrl = network === "base-mainnet"
     ? "https://basescan.org"
     : "https://sepolia.basescan.org";
-  
+
   return `${baseUrl}/tx/${txHash}`;
 }

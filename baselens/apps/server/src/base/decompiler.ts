@@ -25,13 +25,13 @@ export async function isPanoramixAvailable(): Promise<boolean> {
   }
 
   logger.info("[Panoramix] Checking if Panoramix is installed...");
-  
+
   try {
     const { stdout, stderr } = await execAsync("panoramix --help", {
       timeout: 10000,
       env: { ...process.env },
     });
-    
+
     panoramixAvailable = true;
     logger.info("[Panoramix] ✅ Panoramix is installed and available");
     logger.debug("[Panoramix] Help output:", stdout.slice(0, 200));
@@ -54,12 +54,12 @@ export async function decompileWithPanoramixFromBytecode(
 ): Promise<string> {
   // Clean bytecode - remove 0x prefix if present
   const cleanBytecode = bytecode.startsWith("0x") ? bytecode.slice(2) : bytecode;
-  
+
   logger.info(`[Panoramix] Starting bytecode decompilation (${cleanBytecode.length} chars)...`);
   logger.debug(`[Panoramix] Bytecode preview: ${cleanBytecode.slice(0, 100)}...`);
-  
+
   const startTime = Date.now();
-  
+
   try {
     const { stdout, stderr } = await execAsync(
       `panoramix ${cleanBytecode}`,
@@ -69,30 +69,30 @@ export async function decompileWithPanoramixFromBytecode(
         maxBuffer: 10 * 1024 * 1024, // 10MB buffer for large outputs
       }
     );
-    
+
     const duration = Date.now() - startTime;
-    
+
     if (stderr && stderr.trim()) {
       logger.warn(`[Panoramix] Stderr output: ${stderr.slice(0, 500)}`);
     }
-    
+
     if (stdout && stdout.trim()) {
       logger.info(`[Panoramix] ✅ Bytecode decompilation successful (${duration}ms, ${stdout.length} chars output)`);
       logger.debug(`[Panoramix] Output preview:\n${stdout.slice(0, 500)}...`);
       return stdout;
     }
-    
+
     logger.warn(`[Panoramix] ⚠️ Decompilation returned empty output (${duration}ms)`);
     return "";
   } catch (error) {
     const err = error as Error & { code?: string; killed?: boolean; stderr?: string };
     const duration = Date.now() - startTime;
-    
+
     if (err.killed) {
       logger.error(`[Panoramix] ❌ Decompilation TIMED OUT after ${duration}ms (limit: ${DECOMPILE_TIMEOUT}ms)`);
       throw new Error("Panoramix decompilation timed out");
     }
-    
+
     logger.error(`[Panoramix] ❌ Bytecode decompilation FAILED (${duration}ms):`, err.message);
     if (err.stderr) {
       logger.error(`[Panoramix] Stderr: ${err.stderr.slice(0, 500)}`);
@@ -109,12 +109,12 @@ export async function decompileWithPanoramixFromAddress(
   network: Network
 ): Promise<string> {
   const rpcUrl = getRpcUrl(network);
-  
+
   logger.info(`[Panoramix] Starting address-based decompilation for ${address}...`);
   logger.debug(`[Panoramix] Using RPC URL: ${rpcUrl}`);
-  
+
   const startTime = Date.now();
-  
+
   try {
     const { stdout, stderr } = await execAsync(
       `panoramix ${address}`,
@@ -127,29 +127,29 @@ export async function decompileWithPanoramixFromAddress(
         maxBuffer: 10 * 1024 * 1024, // 10MB buffer
       }
     );
-    
+
     const duration = Date.now() - startTime;
-    
+
     if (stderr && stderr.trim()) {
       logger.warn(`[Panoramix] Stderr: ${stderr.slice(0, 500)}`);
     }
-    
+
     if (stdout && stdout.trim()) {
       logger.info(`[Panoramix] ✅ Address decompilation successful (${duration}ms, ${stdout.length} chars)`);
       return stdout;
     }
-    
+
     logger.warn(`[Panoramix] ⚠️ Address decompilation returned empty (${duration}ms)`);
     return "";
   } catch (error) {
     const err = error as Error & { code?: string; killed?: boolean };
     const duration = Date.now() - startTime;
-    
+
     if (err.killed) {
       logger.error(`[Panoramix] ❌ Address decompilation TIMED OUT (${duration}ms)`);
       throw new Error("Panoramix decompilation timed out");
     }
-    
+
     logger.error(`[Panoramix] ❌ Address decompilation FAILED (${duration}ms):`, err.message);
     throw new Error(`Decompilation failed: ${err.message}`);
   }
@@ -163,9 +163,9 @@ export async function decompileFunctionFromBytecode(
   functionSelector: string
 ): Promise<string> {
   const cleanBytecode = bytecode.startsWith("0x") ? bytecode.slice(2) : bytecode;
-  
+
   logger.info(`[Panoramix] Decompiling function ${functionSelector}...`);
-  
+
   try {
     const { stdout, stderr } = await execAsync(
       `panoramix ${cleanBytecode} --function ${functionSelector}`,
@@ -175,11 +175,11 @@ export async function decompileFunctionFromBytecode(
         maxBuffer: 10 * 1024 * 1024,
       }
     );
-    
+
     if (stderr && !stdout) {
       logger.warn(`[Panoramix] Function decompile stderr: ${stderr}`);
     }
-    
+
     logger.info(`[Panoramix] ✅ Function decompilation complete`);
     return stdout || "";
   } catch (error) {
@@ -204,7 +204,7 @@ export async function decompileContract(
   error?: string;
 }> {
   logger.info(`[Panoramix] === Starting decompilation for ${address} ===`);
-  
+
   // First, check if Panoramix is available
   const available = await isPanoramixAvailable();
   if (!available) {
@@ -216,10 +216,15 @@ export async function decompileContract(
       error: "Panoramix is not installed or not in PATH",
     };
   }
-  
+
   // PRIORITY 1: Try bytecode-based decompilation (more reliable)
   if (bytecode && bytecode !== "0x" && bytecode.length > 2) {
     logger.info(`[Panoramix] Attempting bytecode-based decompilation (preferred)...`);
+    logger.info(`[Panoramix] Bytecode info:`);
+    logger.info(`[Panoramix]   - Length: ${bytecode.length} chars`);
+    logger.info(`[Panoramix]   - Starts with 0x: ${bytecode.startsWith("0x")}`);
+    logger.info(`[Panoramix]   - Preview (first 200 chars): ${bytecode.slice(0, 200)}...`);
+    logger.info(`[Panoramix]   - Preview (last 100 chars): ...${bytecode.slice(-100)}`);
     try {
       const result = await decompileWithPanoramixFromBytecode(bytecode);
       if (result && result.trim().length > 0) {
@@ -236,8 +241,9 @@ export async function decompileContract(
     }
   } else {
     logger.warn(`[Panoramix] No valid bytecode provided, skipping bytecode method`);
+    logger.warn(`[Panoramix] Bytecode check: exists=${!!bytecode}, value="${bytecode?.slice(0, 50) || "(null)"}", length=${bytecode?.length || 0}`);
   }
-  
+
   // PRIORITY 2: Fallback to address-based decompilation
   logger.info(`[Panoramix] Attempting address-based decompilation (fallback)...`);
   try {
@@ -254,7 +260,7 @@ export async function decompileContract(
   } catch (error) {
     logger.error(`[Panoramix] Address method also failed:`, error);
   }
-  
+
   logger.error(`[Panoramix] ❌ All decompilation methods failed for ${address}`);
   return {
     success: false,
@@ -269,21 +275,21 @@ export async function decompileContract(
  */
 export function parseFunctionSignatures(decompiledCode: string): string[] {
   const signatures: string[] = [];
-  
+
   // Match function definitions in pseudo-Solidity
   const functionPattern = /def\s+(\w+)\s*\([^)]*\)/g;
   let match;
-  
+
   while ((match = functionPattern.exec(decompiledCode)) !== null) {
     signatures.push(match[0]);
   }
-  
+
   // Also match Solidity-style function definitions
   const solidityPattern = /function\s+(\w+)\s*\([^)]*\)[^{]*/g;
   while ((match = solidityPattern.exec(decompiledCode)) !== null) {
     signatures.push(match[0].trim());
   }
-  
+
   logger.debug(`[Panoramix] Parsed ${signatures.length} function signatures`);
   return signatures;
 }
@@ -297,11 +303,11 @@ export function parseStorageVariables(decompiledCode: string): {
   type?: string;
 }[] {
   const variables: { slot: string; name: string; type?: string }[] = [];
-  
+
   const storPattern = /stor(\d+)|storage\[(\d+)\]/g;
   const seen = new Set<string>();
   let match;
-  
+
   while ((match = storPattern.exec(decompiledCode)) !== null) {
     const slot = match[1] || match[2];
     if (!seen.has(slot)) {
@@ -312,7 +318,7 @@ export function parseStorageVariables(decompiledCode: string): {
       });
     }
   }
-  
+
   logger.debug(`[Panoramix] Parsed ${variables.length} storage variables`);
   return variables;
 }

@@ -9,7 +9,7 @@ import type { Network, StartAnalysisRequest, AnalysisHistoryItem } from "@basele
 import { prisma } from "../db/prismaClient.js";
 import { logger } from "../logger.js";
 import { enqueueAnalysis, getJobStatus } from "../queue/index.js";
-import { buildGraphData } from "../base/graphBuilder.js";
+import { buildGraphData, getContractDetails } from "../base/graphBuilder.js";
 import { getAnalysisSummary, generateContractExplanation } from "../ai/explanations.js";
 
 const router = Router();
@@ -31,10 +31,10 @@ const startAnalysisSchema = z.object({
 router.post("/", async (req, res) => {
   logger.info(`[Route] POST /api/analyze`);
   logger.debug(`[Route] Request body:`, req.body);
-  
+
   try {
     const parsed = startAnalysisSchema.safeParse(req.body);
-    
+
     if (!parsed.success) {
       logger.warn(`[Route] Invalid request body:`, parsed.error.format());
       return res.status(400).json({
@@ -42,15 +42,15 @@ router.post("/", async (req, res) => {
         details: parsed.error.format(),
       });
     }
-    
+
     const { address, network, maxDepth } = parsed.data;
     const normalizedAddress = address.toLowerCase();
-    
+
     logger.info(`[Route] Starting analysis for ${normalizedAddress} on ${network} (maxDepth: ${maxDepth})`);
-    
+
     // Create analysis record
     const analysisId = uuidv4();
-    
+
     logger.debug(`[Route] Creating analysis record: ${analysisId}`);
     await prisma.analysis.create({
       data: {
@@ -61,7 +61,7 @@ router.post("/", async (req, res) => {
         paramsJson: { address: normalizedAddress, network, maxDepth },
       },
     });
-    
+
     // Enqueue job
     logger.debug(`[Route] Enqueuing analysis job...`);
     const jobId = await enqueueAnalysis({
@@ -70,9 +70,9 @@ router.post("/", async (req, res) => {
       network: network as Network,
       maxDepth,
     });
-    
+
     logger.info(`[Route] ✅ Analysis started: ${analysisId}`);
-    
+
     return res.json({ jobId: analysisId });
   } catch (error) {
     logger.error("[Route] ❌ Failed to start analysis:", error);
@@ -87,24 +87,24 @@ router.post("/", async (req, res) => {
 router.get("/:jobId/status", async (req, res) => {
   const { jobId } = req.params;
   logger.debug(`[Route] GET /api/analyze/${jobId}/status`);
-  
+
   try {
     // Get job status from queue
     const queueStatus = await getJobStatus(jobId);
-    
+
     // Get analysis status from database
     const analysis = await prisma.analysis.findUnique({
       where: { id: jobId },
       select: { id: true, status: true, error: true },
     });
-    
+
     if (!analysis) {
       logger.warn(`[Route] Analysis not found: ${jobId}`);
       return res.status(404).json({ error: "Analysis not found" });
     }
-    
+
     logger.debug(`[Route] Status for ${jobId}: ${analysis.status}, progress: ${queueStatus.progress}%`);
-    
+
     return res.json({
       jobId,
       status: analysis.status,
@@ -125,33 +125,33 @@ router.get("/:jobId/status", async (req, res) => {
 router.get("/:analysisId/graph", async (req, res) => {
   const { analysisId } = req.params;
   logger.info(`[Route] GET /api/analysis/${analysisId}/graph`);
-  
+
   try {
     const analysis = await prisma.analysis.findUnique({
       where: { id: analysisId },
     });
-    
+
     if (!analysis) {
       logger.warn(`[Route] Analysis not found: ${analysisId}`);
       return res.status(404).json({ error: "Analysis not found" });
     }
-    
+
     // If we have cached graph data, return it
     if (analysis.summaryJson) {
       logger.info(`[Route] ✅ Returning cached graph data`);
       return res.json(analysis.summaryJson);
     }
-    
+
     // Otherwise, build it fresh
     logger.info(`[Route] Building graph data fresh...`);
     const graphData = await buildGraphData(analysisId);
-    
+
     // Cache it
     await prisma.analysis.update({
       where: { id: analysisId },
       data: { summaryJson: graphData as unknown as Record<string, unknown> },
     });
-    
+
     logger.info(`[Route] ✅ Graph data built and cached`);
     return res.json(graphData);
   } catch (error) {
@@ -167,25 +167,25 @@ router.get("/:analysisId/graph", async (req, res) => {
 router.get("/:analysisId/summary", async (req, res) => {
   const { analysisId } = req.params;
   logger.info(`[Route] GET /api/analysis/${analysisId}/summary`);
-  
+
   try {
     const analysis = await prisma.analysis.findUnique({
       where: { id: analysisId },
     });
-    
+
     if (!analysis) {
       logger.warn(`[Route] Analysis not found: ${analysisId}`);
       return res.status(404).json({ error: "Analysis not found" });
     }
-    
+
     logger.info(`[Route] Fetching AI summary...`);
     const summary = await getAnalysisSummary(analysisId);
-    
+
     if (!summary) {
       logger.warn(`[Route] Summary not available for ${analysisId}`);
       return res.status(404).json({ error: "Summary not available" });
     }
-    
+
     logger.info(`[Route] ✅ Summary returned (${summary.summary.length} chars)`);
     return res.json(summary);
   } catch (error) {
@@ -201,11 +201,11 @@ router.get("/:analysisId/summary", async (req, res) => {
 router.get("/:analysisId/contract/:address/explanation", async (req, res) => {
   const { analysisId, address } = req.params;
   logger.info(`[Route] GET /api/analysis/${analysisId}/contract/${address}/explanation`);
-  
+
   try {
     logger.info(`[Route] Generating contract explanation...`);
     const explanation = await generateContractExplanation(analysisId, address);
-    
+
     logger.info(`[Route] ✅ Explanation generated (${explanation.length} chars)`);
     return res.json({ explanation });
   } catch (error) {
@@ -215,12 +215,36 @@ router.get("/:analysisId/contract/:address/explanation", async (req, res) => {
 });
 
 // ============================================
+// GET /api/analysis/:analysisId/contract/:address/details
+// ============================================
+
+router.get("/:analysisId/contract/:address/details", async (req, res) => {
+  const { analysisId, address } = req.params;
+  logger.info(`[Route] GET /api/analysis/${analysisId}/contract/${address}/details`);
+
+  try {
+    const details = await getContractDetails(analysisId, address);
+
+    if (!details.contract) {
+      logger.warn(`[Route] Contract not found: ${address}`);
+      return res.status(404).json({ error: "Contract not found" });
+    }
+
+    logger.info(`[Route] ✅ Contract details returned`);
+    return res.json(details);
+  } catch (error) {
+    logger.error("[Route] ❌ Failed to get contract details:", error);
+    return res.status(500).json({ error: "Failed to get contract details" });
+  }
+});
+
+// ============================================
 // GET /api/analysis/history - Get all analyses
 // ============================================
 
 router.get("/history", async (_req, res) => {
   logger.info(`[Route] GET /api/analysis/history`);
-  
+
   try {
     const analyses = await prisma.analysis.findMany({
       orderBy: { createdAt: "desc" },
@@ -233,7 +257,7 @@ router.get("/history", async (_req, res) => {
         createdAt: true,
       },
     });
-    
+
     const history: AnalysisHistoryItem[] = analyses.map((a) => ({
       id: a.id,
       rootAddress: a.rootAddress,
@@ -241,7 +265,7 @@ router.get("/history", async (_req, res) => {
       status: a.status as AnalysisHistoryItem["status"],
       createdAt: a.createdAt.toISOString(),
     }));
-    
+
     logger.info(`[Route] ✅ Returning ${history.length} analyses`);
     return res.json(history);
   } catch (error) {
@@ -257,7 +281,7 @@ router.get("/history", async (_req, res) => {
 router.get("/:analysisId", async (req, res) => {
   const { analysisId } = req.params;
   logger.info(`[Route] GET /api/analysis/${analysisId}`);
-  
+
   try {
     const analysis = await prisma.analysis.findUnique({
       where: { id: analysisId },
@@ -280,14 +304,14 @@ router.get("/:analysisId", async (req, res) => {
         },
       },
     });
-    
+
     if (!analysis) {
       logger.warn(`[Route] Analysis not found: ${analysisId}`);
       return res.status(404).json({ error: "Analysis not found" });
     }
-    
+
     logger.info(`[Route] ✅ Analysis details: ${analysis.contracts.length} contracts`);
-    
+
     return res.json({
       id: analysis.id,
       rootAddress: analysis.rootAddress,

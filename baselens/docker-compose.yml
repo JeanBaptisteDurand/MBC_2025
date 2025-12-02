@@ -1,0 +1,91 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: baselens-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-baselens}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-baselens}
+      POSTGRES_DB: ${POSTGRES_DB:-baselens}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # Init script to enable pgvector extension
+      - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U baselens -d baselens" ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: baselens-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  server:
+    build:
+      context: .
+      dockerfile: apps/server/Dockerfile
+    container_name: baselens-server
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-baselens}:${POSTGRES_PASSWORD:-baselens}@postgres:5432/${POSTGRES_DB:-baselens}?schema=public
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      PORT: 3001
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      OPENAI_CHAT_MODEL: ${OPENAI_CHAT_MODEL:-gpt-4o-mini}
+      OPENAI_EMBEDDING_MODEL: ${OPENAI_EMBEDDING_MODEL:-text-embedding-3-small}
+      BASE_RPC_URL: ${BASE_RPC_URL:-https://mainnet.base.org}
+      BASE_SEPOLIA_RPC_URL: ${BASE_SEPOLIA_RPC_URL:-https://sepolia.base.org}
+      BASESCAN_API_KEY: ${BASESCAN_API_KEY}
+    ports:
+      - "3001:3001"
+    volumes:
+      # Hot reload: mount source code for development
+      - ./apps/server/src:/app/apps/server/src:ro
+      - ./apps/server/prisma:/app/apps/server/prisma:ro
+      - ./packages/core/src:/app/packages/core/src:ro
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    container_name: baselens-web
+    restart: unless-stopped
+    depends_on:
+      - server
+    environment:
+      VITE_API_URL: http://localhost:3001
+    ports:
+      - "3000:3000"
+    volumes:
+      # Hot reload: mount source code for development
+      - ./apps/web/src:/app/apps/web/src:ro
+      - ./apps/web/index.html:/app/apps/web/index.html:ro
+      - ./apps/web/public:/app/apps/web/public:ro
+      - ./packages/core/src:/app/packages/core/src:ro
+
+volumes:
+  postgres_data:
+  redis_data:
+
+

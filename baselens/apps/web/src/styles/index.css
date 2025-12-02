@@ -1,0 +1,193 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Base styles */
+@layer base {
+  html {
+    @apply antialiased;
+  }
+
+  body {
+    @apply bg-surface-950 text-surface-100 min-h-screen;
+  }
+
+  /* Custom scrollbar */
+  ::-webkit-scrollbar {
+    @apply w-2 h-2;
+  }
+
+  ::-webkit-scrollbar-track {
+    @apply bg-surface-900;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    @apply bg-surface-700 rounded-full;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-surface-600;
+  }
+}
+
+/* Component styles */
+@layer components {
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg font-medium transition-all duration-200;
+    @apply focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-surface-900;
+    @apply disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+
+  .btn-primary {
+    @apply bg-primary-600 text-white hover:bg-primary-500;
+    @apply focus:ring-primary-500;
+  }
+
+  .btn-secondary {
+    @apply bg-surface-800 text-surface-100 hover:bg-surface-700;
+    @apply focus:ring-surface-500;
+  }
+
+  .btn-accent {
+    @apply bg-accent-600 text-white hover:bg-accent-500;
+    @apply focus:ring-accent-500;
+  }
+
+  .btn-ghost {
+    @apply bg-transparent text-surface-300 hover:bg-surface-800 hover:text-surface-100;
+  }
+
+  .btn-sm {
+    @apply px-3 py-1.5 text-sm;
+  }
+
+  .btn-lg {
+    @apply px-6 py-3 text-lg;
+  }
+
+  .card {
+    @apply bg-surface-900/50 backdrop-blur-sm border border-surface-800 rounded-xl;
+  }
+
+  .input {
+    @apply w-full px-4 py-3 rounded-lg bg-surface-800 border border-surface-700;
+    @apply text-surface-100 placeholder-surface-500;
+    @apply focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent;
+    @apply transition-all duration-200;
+  }
+
+  .badge {
+    @apply inline-flex items-center px-2 py-0.5 rounded text-xs font-medium;
+  }
+
+  .badge-primary {
+    @apply bg-primary-900/50 text-primary-400 border border-primary-700/50;
+  }
+
+  .badge-accent {
+    @apply bg-accent-900/50 text-accent-400 border border-accent-700/50;
+  }
+
+  .badge-success {
+    @apply bg-emerald-900/50 text-emerald-400 border border-emerald-700/50;
+  }
+
+  .badge-warning {
+    @apply bg-amber-900/50 text-amber-400 border border-amber-700/50;
+  }
+
+  .badge-error {
+    @apply bg-red-900/50 text-red-400 border border-red-700/50;
+  }
+
+  .gradient-text {
+    @apply bg-gradient-to-r from-primary-400 via-accent-400 to-primary-400 bg-clip-text text-transparent;
+  }
+
+  .glow-effect {
+    @apply shadow-lg shadow-primary-500/20;
+  }
+}
+
+/* React Flow custom styles */
+.react-flow__node {
+  @apply transition-transform duration-200;
+}
+
+.react-flow__node:hover {
+  @apply z-50;
+}
+
+.react-flow__edge-path {
+  @apply transition-all duration-200;
+}
+
+.react-flow__controls {
+  @apply bg-surface-900/80 backdrop-blur-sm border border-surface-700 rounded-lg overflow-hidden;
+}
+
+.react-flow__controls-button {
+  @apply bg-transparent text-surface-300 hover:bg-surface-800 hover:text-surface-100 border-surface-700;
+}
+
+.react-flow__minimap {
+  @apply bg-surface-900/80 backdrop-blur-sm border border-surface-700 rounded-lg;
+}
+
+/* Animations */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: translateX(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes pulse-glow {
+  0%, 100% {
+    box-shadow: 0 0 5px currentColor, 0 0 10px currentColor;
+  }
+  50% {
+    box-shadow: 0 0 20px currentColor, 0 0 30px currentColor;
+  }
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.3s ease-out;
+}
+
+.animate-slide-in {
+  animation: slideIn 0.3s ease-out;
+}
+
+.animate-pulse-glow {
+  animation: pulse-glow 2s ease-in-out infinite;
+}
+
+/* Code block styles */
+.prose pre {
+  @apply bg-surface-900 border border-surface-700 rounded-lg p-4 overflow-x-auto;
+}
+
+.prose code {
+  @apply bg-surface-800 px-1.5 py-0.5 rounded text-primary-400;
+}
+
+.prose pre code {
+  @apply bg-transparent p-0;
+}
+

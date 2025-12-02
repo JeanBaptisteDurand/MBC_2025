@@ -1,0 +1,207 @@
+// BaseLens Prisma Schema
+// PostgreSQL with pgvector extension
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  extensions = [vector]
+}
+
+// ============================================
+// Analysis - Root entity for each analysis run
+// ============================================
+
+model Analysis {
+  id          String   @id @default(uuid())
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  network     String   // "base-mainnet" or "base-sepolia"
+  rootAddress String
+  status      String   @default("queued") // "queued" | "running" | "done" | "error"
+  summaryJson Json?    // Full GraphData for this analysis
+  paramsJson  Json?    // Analysis parameters
+  error       String?
+
+  // Relations
+  contracts    Contract[]
+  sourceFiles  SourceFile[]
+  typeDefs     TypeDef[]
+  edges        Edge[]
+  events       Event[]
+  ragDocuments RagDocument[]
+  ragChats     RagChat[]
+  summary      GlobalAnalysisSummary?
+
+  @@index([rootAddress])
+  @@index([status])
+  @@index([createdAt])
+}
+
+// ============================================
+// Contract - On-chain contract information
+// ============================================
+
+model Contract {
+  id             String  @id @default(uuid())
+  analysisId     String
+  address        String
+  name           String?
+  kindOnChain    String  @default("CONTRACT_SIMPLE") // "EOA" | "CONTRACT_SIMPLE" | "PROXY" | "IMPLEMENTATION"
+  network        String
+  verified       Boolean @default(false)
+  sourceType     String  @default("none") // "verified" | "decompiled" | "none"
+  tagsJson       Json?   // Classification flags
+  abiJson        Json?   // ABI if available
+  sourceCode     String? // Solidity or pseudo-Solidity
+  creatorAddress String?
+  creationTxHash String?
+
+  analysis Analysis @relation(fields: [analysisId], references: [id], onDelete: Cascade)
+
+  @@unique([analysisId, address])
+  @@index([address])
+}
+
+// ============================================
+// SourceFile - Source code files for contracts
+// ============================================
+
+model SourceFile {
+  id              String @id @default(uuid())
+  analysisId      String
+  contractAddress String
+  path            String // Source file path/name
+  sourceType      String // "verified" | "decompiled"
+  content         String
+
+  analysis Analysis  @relation(fields: [analysisId], references: [id], onDelete: Cascade)
+  typeDefs TypeDef[]
+
+  @@index([analysisId, contractAddress])
+}
+
+// ============================================
+// TypeDef - Type definitions from source code
+// ============================================
+
+model TypeDef {
+  id                 String  @id @default(uuid())
+  analysisId         String
+  sourceFileId       String
+  name               String
+  kind               String  // "INTERFACE" | "ABSTRACT_CONTRACT" | "CONTRACT_IMPL" | "LIBRARY"
+  instanciable       Boolean @default(false)
+  isRootContractType Boolean @default(false)
+  metadataJson       Json?   // Implemented interfaces, parent contracts, etc.
+
+  analysis   Analysis   @relation(fields: [analysisId], references: [id], onDelete: Cascade)
+  sourceFile SourceFile @relation(fields: [sourceFileId], references: [id], onDelete: Cascade)
+
+  @@index([analysisId])
+  @@index([sourceFileId])
+}
+
+// ============================================
+// Edge - Graph edges connecting nodes
+// ============================================
+
+model Edge {
+  id           String @id @default(uuid())
+  analysisId   String
+  fromNodeId   String // NodeId string
+  toNodeId     String // NodeId string
+  kind         String // EdgeKind enum value
+  evidenceJson Json?  // Tx hashes, storage slots, traces, etc.
+
+  analysis Analysis @relation(fields: [analysisId], references: [id], onDelete: Cascade)
+
+  @@index([analysisId])
+  @@index([fromNodeId])
+  @@index([toNodeId])
+}
+
+// ============================================
+// Event - Contract events/logs
+// ============================================
+
+model Event {
+  id              String   @id @default(uuid())
+  analysisId      String
+  contractAddress String
+  signature       String
+  txHash          String
+  dataJson        Json?
+  timestamp       DateTime?
+
+  analysis Analysis @relation(fields: [analysisId], references: [id], onDelete: Cascade)
+
+  @@index([analysisId, contractAddress])
+}
+
+// ============================================
+// GlobalAnalysisSummary - AI-generated summary
+// ============================================
+
+model GlobalAnalysisSummary {
+  id            String @id @default(uuid())
+  analysisId    String @unique
+  summary       String
+  securityNotes String
+  ultraSummary  String
+
+  analysis Analysis @relation(fields: [analysisId], references: [id], onDelete: Cascade)
+}
+
+// ============================================
+// RagDocument - Vectorized documents for RAG
+// ============================================
+
+model RagDocument {
+  id         String                      @id @default(uuid())
+  analysisId String
+  kind       String // "contract" | "type" | "global" | "note"
+  refId      String // Contract address or type name
+  content    String
+  embedding  Unsupported("vector(1536)")?
+
+  analysis Analysis @relation(fields: [analysisId], references: [id], onDelete: Cascade)
+
+  @@index([analysisId])
+}
+
+// ============================================
+// RagChat - Chat sessions for RAG
+// ============================================
+
+model RagChat {
+  id         String   @id @default(uuid())
+  analysisId String?
+  createdAt  DateTime @default(now())
+
+  analysis Analysis?    @relation(fields: [analysisId], references: [id], onDelete: Cascade)
+  messages RagMessage[]
+
+  @@index([analysisId])
+}
+
+// ============================================
+// RagMessage - Individual chat messages
+// ============================================
+
+model RagMessage {
+  id        String   @id @default(uuid())
+  chatId    String
+  role      String // "user" | "assistant"
+  content   String
+  createdAt DateTime @default(now())
+
+  chat RagChat @relation(fields: [chatId], references: [id], onDelete: Cascade)
+
+  @@index([chatId])
+}
+

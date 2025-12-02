@@ -3,6 +3,7 @@ import Layout from "./components/Layout";
 import Home from "./routes/Home";
 import GraphView from "./routes/GraphView";
 import History from "./routes/History";
+import Profile from "./routes/Profile";
 
 function App() {
   return (
@@ -11,6 +12,7 @@ function App() {
         <Route index element={<Home />} />
         <Route path="graph/:analysisId" element={<GraphView />} />
         <Route path="history" element={<History />} />
+        <Route path="profile" element={<Profile />} />
       </Route>
     </Routes>
   );

@@ -12,8 +12,8 @@ import { parseEther, encodeFunctionData } from "viem";
 import type { Network } from "@baselens/core";
 import { cn } from "../utils/cn";
 
-const PAY_CONTRACT_ADDRESS = "0x4ab920a4b2Ff9CB1206225c774DD14d78036c398" as const;
-const PAY_AMOUNT = parseEther("0.01"); // 0.01 ETH
+const PAY_CONTRACT_ADDRESS = "0x3A7F370D0C105Afc23800253504656ae99857bde" as const;
+const PAY_AMOUNT = parseEther("0.0001"); // 0.0001 ETH
 
 // ABI for the pay function
 const payAbi = [

@@ -277,13 +277,16 @@ function ContractDetails({
             View Source Code
           </button>
         )}
-        <button
-          onClick={() => onViewExplanation(node.address)}
-          className="btn btn-accent w-full flex items-center justify-center gap-2"
-        >
-          <Bot className="w-4 h-4" />
-          See AI Explanation
-        </button>
+        {/* Hide AI explanation for EOA (wallet) contracts */}
+        {node.kindOnChain !== "EOA" && (
+          <button
+            onClick={() => onViewExplanation(node.address)}
+            className="btn btn-accent w-full flex items-center justify-center gap-2"
+          >
+            <Bot className="w-4 h-4" />
+            See AI Explanation
+          </button>
+        )}
       </div>
     </div>
   );

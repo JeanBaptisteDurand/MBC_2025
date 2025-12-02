@@ -1,5 +1,5 @@
 import { Outlet, Link, useLocation } from "react-router-dom";
-import { Activity, History, Sun, Moon, Hexagon } from "lucide-react";
+import { Activity, History, Sun, Moon, Hexagon, User } from "lucide-react";
 import { ConnectWallet, Wallet, WalletDropdown, WalletDropdownDisconnect } from "@coinbase/onchainkit/wallet";
 import { Address, Avatar, Name, Identity } from "@coinbase/onchainkit/identity";
 import { useTheme } from "../hooks/useTheme";
@@ -50,6 +50,18 @@ export default function Layout() {
             >
               <History className="w-4 h-4" />
               History
+            </Link>
+            <Link
+              to="/profile"
+              className={cn(
+                "flex items-center gap-2 text-sm font-medium transition-colors",
+                location.pathname === "/profile"
+                  ? "text-primary-400"
+                  : "text-surface-400 hover:text-surface-100"
+              )}
+            >
+              <User className="w-4 h-4" />
+              Profile
             </Link>
 
             {/* Theme Toggle */}

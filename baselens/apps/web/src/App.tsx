@@ -4,6 +4,7 @@ import Home from "./routes/Home";
 import GraphView from "./routes/GraphView";
 import History from "./routes/History";
 import Profile from "./routes/Profile";
+import Chat from "./routes/Chat";
 
 function App() {
   return (
@@ -11,6 +12,7 @@ function App() {
       <Route path="/" element={<Layout />}>
         <Route index element={<Home />} />
         <Route path="graph/:analysisId" element={<GraphView />} />
+		<Route path="chat" element={<Chat />} />
         <Route path="history" element={<History />} />
         <Route path="profile" element={<Profile />} />
       </Route>

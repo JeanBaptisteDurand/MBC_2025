@@ -1,5 +1,5 @@
 import { Outlet, Link, useLocation } from "react-router-dom";
-import { Activity, History, Sun, Moon, Hexagon, User } from "lucide-react";
+import { Activity, History, Sun, Moon, Hexagon, User, BotMessageSquare } from "lucide-react";
 import { ConnectWallet, Wallet, WalletDropdown, WalletDropdownDisconnect } from "@coinbase/onchainkit/wallet";
 import { Address, Avatar, Name, Identity } from "@coinbase/onchainkit/identity";
 import { useTheme } from "../hooks/useTheme";
@@ -27,6 +27,18 @@ export default function Layout() {
 
           {/* Navigation */}
           <nav className="flex items-center gap-6">
+			<Link
+              to="/chat"
+              className={cn(
+                "flex items-center gap-2 text-sm font-medium transition-colors",
+                location.pathname === "/chat"
+                  ? "text-primary-400"
+                  : "text-surface-400 hover:text-surface-100"
+              )}
+            >
+              <BotMessageSquare className="w-4 h-4" />
+              Chat
+            </Link>
             <Link
               to="/"
               className={cn(
@@ -103,21 +115,23 @@ export default function Layout() {
       </main>
 
       {/* Footer */}
-      <footer className="border-t border-surface-800 py-6">
-        <div className="container mx-auto px-4 text-center text-surface-500 text-sm">
-          <p>
-            BaseLens — Smart Contract Analysis for{" "}
-            <a
-              href="https://base.org"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-primary-400 hover:underline"
-            >
-              Base L2
-            </a>
-          </p>
-        </div>
-      </footer>
+      {!(location.pathname.startsWith("/graph") || location.pathname === "/chat") && (
+        <footer className="border-t border-surface-800 py-6">
+          <div className="container mx-auto px-4 text-center text-surface-500 text-sm">
+            <p>
+              BaseLens — Smart Contract Analysis for{" "}
+              <a
+                href="https://base.org"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-primary-400 hover:underline"
+              >
+                Base L2
+              </a>
+            </p>
+          </div>
+        </footer>
+      )}
     </div>
   );
 }

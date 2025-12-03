@@ -1,7 +1,7 @@
 import { useRef, useLayoutEffect } from 'react';
 import gsap from 'gsap';
 import Bubble from '../Bubble';
-import ChatInterface from './ChatInterface';
+import ChatInterfaceAgent from './ChatInterfaceAgent';
 
 interface InteractionBubblesProps {
     isSplit: boolean;
@@ -48,23 +48,23 @@ export default function InteractionBubbles({ isSplit, onSplit, isChatMode, onCha
 
     useLayoutEffect(() => {
         const ctx = gsap.context(() => {
-             // Initial entrance for main bubble
-             gsap.from(bubbleRef.current, { 
-                 scale: 0, 
-                 opacity: 0, 
-                 duration: 1.5, 
-                 ease: "elastic.out(1, 0.5)", 
-                 delay: 1.5 
-             });
+            // Initial entrance for main bubble
+            gsap.from(bubbleRef.current, {
+                scale: 0,
+                opacity: 0,
+                duration: 1.5,
+                ease: "elastic.out(1, 0.5)",
+                delay: 1.5
+            });
 
-             // Idle animation
-             gsap.to(bubbleRef.current, {
+            // Idle animation
+            gsap.to(bubbleRef.current, {
                 y: 15,
                 duration: 3,
                 repeat: -1,
                 yoyo: true,
                 ease: "sine.inOut"
-              });
+            });
         }, containerRef);
         return () => ctx.revert();
     }, []);
@@ -74,22 +74,22 @@ export default function InteractionBubbles({ isSplit, onSplit, isChatMode, onCha
         if (isSplit && !isChatMode && bubbleRef.current && secondBubbleRef.current) {
             const ctx = gsap.context(() => {
                 gsap.killTweensOf(bubbleRef.current);
-        
+
                 gsap.to(bubbleRef.current, {
                     x: -150,
                     y: 0,
                     duration: 1,
                     ease: "power3.out"
                 });
-                
-                gsap.fromTo(secondBubbleRef.current, 
+
+                gsap.fromTo(secondBubbleRef.current,
                     { x: 0, scale: 0, opacity: 0 },
-                    { 
-                        x: 150, 
-                        scale: 1, 
-                        opacity: 1, 
-                        duration: 1, 
-                        ease: "power3.out" 
+                    {
+                        x: 150,
+                        scale: 1,
+                        opacity: 1,
+                        duration: 1,
+                        ease: "power3.out"
                     }
                 );
             }, containerRef);
@@ -123,13 +123,13 @@ export default function InteractionBubbles({ isSplit, onSplit, isChatMode, onCha
 
                 // Animate in the chat interface
                 gsap.fromTo(chatInterfaceRef.current,
-                    { 
-                        opacity: 0, 
+                    {
+                        opacity: 0,
                         scale: 0.8,
                         y: 20
                     },
-                    { 
-                        opacity: 1, 
+                    {
+                        opacity: 1,
                         scale: 1,
                         y: 0,
                         duration: 0.6,
@@ -147,8 +147,8 @@ export default function InteractionBubbles({ isSplit, onSplit, isChatMode, onCha
             {!isChatMode && (
                 <>
                     <div className="absolute flex justify-center items-center">
-                        <Bubble 
-                            ref={bubbleRef} 
+                        <Bubble
+                            ref={bubbleRef}
                             onMouseEnter={handleBubbleMouseEnter}
                             onMouseLeave={handleBubbleMouseLeave}
                         >
@@ -159,7 +159,7 @@ export default function InteractionBubbles({ isSplit, onSplit, isChatMode, onCha
                     </div>
                     {isSplit && (
                         <div className="absolute flex justify-center items-center">
-                            <Bubble 
+                            <Bubble
                                 ref={secondBubbleRef}
                                 onMouseEnter={handleChatBubbleMouseEnter}
                                 onMouseLeave={handleChatBubbleMouseLeave}
@@ -172,14 +172,14 @@ export default function InteractionBubbles({ isSplit, onSplit, isChatMode, onCha
                     )}
                 </>
             )}
-            
+
             {/* Chat Interface - shown when in chat mode */}
             {isChatMode && (
-                <div 
-                    ref={chatInterfaceRef} 
+                <div
+                    ref={chatInterfaceRef}
                     className="w-full"
                 >
-                    <ChatInterface isVisible={isChatMode} />
+                    <ChatInterfaceAgent isVisible={isChatMode} />
                 </div>
             )}
         </div>

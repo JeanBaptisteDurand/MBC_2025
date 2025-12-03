@@ -15,7 +15,12 @@ import chatRagRoutes from "./routes/chat-rag.js";
 import sourceRoutes from "./routes/source.js";
 import userRoutes from "./routes/users.js";
 import authRoutes from "./routes/auth.js";
+import agentRoutes from "./routes/agent.js";
 import { isPanoramixAvailable } from "./base/decompiler.js";
+import { initializeAgentWallet, getAgentWalletAddress, getAgentEthBalance } from "./agent/wallet.js";
+import { formatEther } from "viem";
+import { initializeAgentKit } from "./agent/agentKitSetup.js";
+import { getAvailableTools } from "./agent/contractTools.js";
 
 const app = express();
 
@@ -41,6 +46,7 @@ app.use("/api/analysis", analysisRoutes);
 app.use("/api/rag", ragRoutes);
 app.use("/api/chat-rag", chatRagRoutes);
 app.use("/api/source", sourceRoutes);
+app.use("/api/agent", agentRoutes); // Agent routes: /api/agent/plan, /api/agent/execute, etc.
 app.use("/api", userRoutes); // User routes: /api/users, /api/me, /api/me/smart-wallet/*
 
 // Error handling middleware
@@ -134,8 +140,50 @@ async function start() {
       logger.warn("========================================");
     }
 
+    // Initialize AgentKit and agent wallet
+    logger.info("[Startup] Step 6: Initializing AgentKit and agent wallet...");
+    try {
+      // Initialize AgentKit
+      await initializeAgentKit();
+      const availableTools = getAvailableTools();
+      logger.info(`[AgentKit] ✅ Initialized with ${availableTools.length} tools: ${availableTools.join(", ")}`);
+
+      // Initialize agent wallet
+      initializeAgentWallet();
+      const agentAddress = getAgentWalletAddress();
+
+      // Check balance
+      const balance = await getAgentEthBalance();
+      const balanceEth = parseFloat(formatEther(balance));
+
+      // Display prominent wallet info
+      logger.info("========================================");
+      logger.info("🤖 AGENT WALLET INFORMATION");
+      logger.info("========================================");
+      logger.info(`📧 Address: ${agentAddress}`);
+      logger.info(`💰 Balance: ${balanceEth.toFixed(6)} ETH`);
+
+      if (balanceEth < 0.01) {
+        logger.warn("⚠️  WARNING: Agent wallet has low ETH balance!");
+        logger.warn("   Please fund the wallet to enable agent functionality.");
+        logger.warn("");
+        logger.warn(`   👆 COPY THIS ADDRESS TO FUND IT:`);
+        logger.warn(`   ${agentAddress}`);
+        logger.warn("");
+        logger.warn("   You can use a Base Sepolia faucet or send ETH from another wallet.");
+      } else {
+        logger.info("✅ Agent wallet has sufficient funds");
+      }
+
+      logger.info(`📍 View on Basescan: https://sepolia.basescan.org/address/${agentAddress}`);
+      logger.info("========================================");
+    } catch (error) {
+      logger.error("[Agent] ❌ Failed to initialize agent wallet:", error);
+      logger.warn("[Agent] Agent functionality will be unavailable");
+    }
+
     // Start Express server
-    logger.info("[Startup] Step 6: Starting HTTP server...");
+    logger.info("[Startup] Step 7: Starting HTTP server...");
     app.listen(config.PORT, () => {
       logger.info("========================================");
       logger.info("✅ BASELENS SERVER READY");

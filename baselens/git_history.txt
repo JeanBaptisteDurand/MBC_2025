@@ -1,0 +1,44 @@
+56df795 Merge pull request #8 from JeanBaptisteDurand/fix_basescan
+9c69b31 swap finnaly working
+8856f63 adjust agent
+2faa13e first agent swap working
+ffc849e Merge pull request #7 from JeanBaptisteDurand/fix_basescan
+593b4aa paiement fix
+b38a36e good display
+58c860b filter and legends
+2779164 upgrade profile page
+1da8d48 jwt working
+fa214c0 Merge pull request #6 from JeanBaptisteDurand/x402
+a448954 merge
+dbdffb2 add summary + smooth scroll
+b4f2bce Merge pull request #4 from JeanBaptisteDurand/feat/chat-interface
+11bcef8 Merge branch 'main' into feat/chat-interface
+6277bb2 add request execution
+8412b17 event history fix
+66343b8 delete smart wallet for x402
+5d67bfd x402 working for eoa wallet
+f241ec0 add conversation mock follow up
+1720c90 add conversation chat interface
+c8946da refactor
+0b382b6 fix event page for smart wallet detection
+176d21b Merge pull request #5 from JeanBaptisteDurand/fix_basescan
+42f27df a lot of small change
+b316b38 fix front chat
+10a20e7 rag working
+0d46609 initial chat page
+bcf06dd Merge pull request #3 from JeanBaptisteDurand/fix_basescan
+82624fd smart wallet, paymaster, zerodev
+0d049e7 Merge pull request #2 from JeanBaptisteDurand/fix_basescan
+0dcf908 profile
+45aab7e new contract
+e4df28b Merge pull request #1 from JeanBaptisteDurand/fix_basescan
+c4e3bdb onchain kit working
+96915cc onchainkit working
+17d0d08 fix rag and cache
+2b831fe fix filter only contracts
+4006ac7 more precise graph
+803b35d basescan working
+82196e9 small adjust
+926b680 first draft
+d16fb62 readme
+f77ee79 Initial commit

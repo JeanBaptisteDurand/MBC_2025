@@ -35,6 +35,15 @@ const envSchema = z.object({
 
   // JWT
   JWT_SECRET: z.string().min(32, "JWT_SECRET must be at least 32 characters"),
+
+  // Agent Wallet (optional - will auto-generate if not provided)
+  AGENT_WALLET_PRIVATE_KEY: z.string().optional(),
+  USDC_ADDRESS_BASE_SEPOLIA: z.string().optional(),
+
+  // AgentKit / CDP Configuration (NOT NEEDED - only if using Coinbase-managed wallets)
+  // Current setup uses private key wallet, so CDP keys are optional/unused
+  CDP_API_KEY_NAME: z.string().optional(),
+  CDP_API_KEY_PRIVATE_KEY: z.string().optional(),
 });
 
 function loadConfig() {

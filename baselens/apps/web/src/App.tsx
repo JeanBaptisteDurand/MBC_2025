@@ -5,12 +5,14 @@ import GraphView from "./routes/GraphView";
 import History from "./routes/History";
 import Profile from "./routes/Profile";
 import Chat from "./routes/Chat";
+import Analyze from "./routes/Analyze";
 
 function App() {
   return (
     <Routes>
       <Route path="/" element={<Layout />}>
         <Route index element={<Home />} />
+		<Route path="analyze" element={<Analyze />} />
         <Route path="graph/:analysisId" element={<GraphView />} />
 		<Route path="chat" element={<Chat />} />
         <Route path="history" element={<History />} />

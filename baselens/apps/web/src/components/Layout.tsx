@@ -40,10 +40,10 @@ export default function Layout() {
               Chat
             </Link>
             <Link
-              to="/"
+              to="/analyze"
               className={cn(
                 "flex items-center gap-2 text-sm font-medium transition-colors",
-                location.pathname === "/"
+                location.pathname === "/analyze"
                   ? "text-primary-400"
                   : "text-surface-400 hover:text-surface-100"
               )}

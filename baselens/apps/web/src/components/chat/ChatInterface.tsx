@@ -53,10 +53,13 @@ const initialExecutionSteps: ExecutionStep[] = [
     { label: "Step 1: Swap ETH to USDC", status: 'pending' },
     { label: "Step 2: Lend USDC on Morpho", status: 'pending' },
     { label: "Step 3: Wait for transaction validation on blockchain", status: 'pending' },
+	{label: "step 4: mock step 4", status: 'pending'},
+	{label: "step 5: mock step 5", status: 'pending'},
+	{label: "step 6: mock step 6", status: 'pending'},
 ];
 
 // Mock wait times for each execution step (in ms)
-const executionStepDelays = [2000, 2500, 3000, 1500];
+const executionStepDelays = () => Math.floor(Math.random() * 1000) + 1000;
 
 // Mock summary data
 const mockSummaryCards: SummaryCard[] = [
@@ -79,14 +82,14 @@ const mockStepApiCall = async (stepIndex: number): Promise<string> => {
 
 // Mock OnchainKit call - Step 0 is special, frontend calls OnchainKit
 const mockOnchainKitCall = async (): Promise<boolean> => {
-    await new Promise(resolve => setTimeout(resolve, executionStepDelays[0]));
+    await new Promise(resolve => setTimeout(resolve, executionStepDelays()));
     // Simulate successful OnchainKit operation
     return true;
 };
 
 // Mock backend execution step call
 const mockExecutionStepCall = async (stepIndex: number): Promise<boolean> => {
-    await new Promise(resolve => setTimeout(resolve, executionStepDelays[stepIndex]));
+    await new Promise(resolve => setTimeout(resolve, executionStepDelays()));
     return true;
 };
 
@@ -110,6 +113,9 @@ export default function ChatInterface({ isVisible }: ChatInterfaceProps) {
     
     // Summary state
     const [showSummary, setShowSummary] = useState(false);
+    
+    // Track which elements have already been scrolled to (only scroll once per element)
+    const hasScrolledTo = useRef<Set<string>>(new Set());
 
     // Find the scrollable parent container
     const getScrollContainer = (): HTMLElement | null => {
@@ -124,30 +130,37 @@ export default function ChatInterface({ isVisible }: ChatInterfaceProps) {
         return null;
     };
 
-    // Auto-scroll when loading dots appear
+    // Auto-scroll when loading dots appear (only once)
     useEffect(() => {
-        if (isLoading) {
+        if (isLoading && !hasScrolledTo.current.has('loading')) {
+            hasScrolledTo.current.add('loading');
             scrollToElement(loadingDotsRef.current, getScrollContainer());
+        }
+        if (!isLoading) {
+            hasScrolledTo.current.delete('loading');
         }
     }, [isLoading]);
 
-    // Auto-scroll when steps list appears or updates
+    // Auto-scroll when steps list appears (only once)
     useEffect(() => {
-        if (showSteps && steps.length > 0) {
+        if (showSteps && steps.length > 0 && !hasScrolledTo.current.has('steps')) {
+            hasScrolledTo.current.add('steps');
             scrollToElement(stepsListRef.current, getScrollContainer());
         }
     }, [showSteps, steps]);
 
-    // Auto-scroll when execution list appears or updates
+    // Auto-scroll when execution list appears (only once)
     useEffect(() => {
-        if (showExecution && executionSteps.length > 0) {
+        if (showExecution && executionSteps.length > 0 && !hasScrolledTo.current.has('execution')) {
+            hasScrolledTo.current.add('execution');
             scrollToElement(executionListRef.current, getScrollContainer());
         }
-    }, [showExecution, executionSteps, currentExecutionStep]);
+    }, [showExecution, executionSteps]);
 
-    // Auto-scroll when summary appears
+    // Auto-scroll when summary appears (only once)
     useEffect(() => {
-        if (showSummary) {
+        if (showSummary && !hasScrolledTo.current.has('summary')) {
+            hasScrolledTo.current.add('summary');
             scrollToElement(summaryRef.current, getScrollContainer());
         }
     }, [showSummary]);

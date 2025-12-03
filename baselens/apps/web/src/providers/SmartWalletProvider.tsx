@@ -257,8 +257,12 @@ export function SmartWalletProvider({
   }, [walletClient, eoaAddress, publicClient, bundlerUrl, paymasterUrl]);
 
   const activateSmartWallet = useCallback(async (): Promise<Address | null> => {
-    if (!isConnected || !eoaAddress || !walletClient) {
+    if (!isConnected || !eoaAddress) {
       throw new Error("Please connect your wallet first");
+    }
+
+    if (!walletClient) {
+      throw new Error("Wallet is not ready yet. Please wait a moment and try again, or reconnect your wallet.");
     }
 
     try {

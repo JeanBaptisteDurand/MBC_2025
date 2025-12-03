@@ -32,6 +32,9 @@ const envSchema = z.object({
   // x402 Payment
   SERVER_PAY_TO_ADDRESS: z.string().optional(),
   X402_FACILITATOR_URL: z.string().url().optional(),
+
+  // JWT
+  JWT_SECRET: z.string().min(32, "JWT_SECRET must be at least 32 characters"),
 });
 
 function loadConfig() {

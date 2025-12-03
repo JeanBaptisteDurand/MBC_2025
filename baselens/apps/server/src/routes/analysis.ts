@@ -11,6 +11,7 @@ import { logger } from "../logger.js";
 import { enqueueAnalysis, getJobStatus } from "../queue/index.js";
 import { buildGraphData, getContractDetails } from "../base/graphBuilder.js";
 import { getAnalysisSummary, generateContractExplanation } from "../ai/explanations.js";
+import { authenticateToken, type AuthRequest } from "../middleware/auth.js";
 
 const router = Router();
 
@@ -28,7 +29,7 @@ const startAnalysisSchema = z.object({
 // POST /api/analyze - Start a new analysis
 // ============================================
 
-router.post("/", async (req, res) => {
+router.post("/", authenticateToken, async (req: AuthRequest, res) => {
   logger.info(`[Route] POST /api/analyze`);
   logger.debug(`[Route] Request body:`, req.body);
 
@@ -43,10 +44,15 @@ router.post("/", async (req, res) => {
       });
     }
 
+    if (!req.userId) {
+      logger.warn(`[Route] No userId in request`);
+      return res.status(401).json({ error: "Authentication required" });
+    }
+
     const { address, network, maxDepth } = parsed.data;
     const normalizedAddress = address.toLowerCase();
 
-    logger.info(`[Route] Starting analysis for ${normalizedAddress} on ${network} (maxDepth: ${maxDepth})`);
+    logger.info(`[Route] Starting analysis for ${normalizedAddress} on ${network} (maxDepth: ${maxDepth}) by user ${req.userId}`);
 
     // Create analysis record
     const analysisId = uuidv4();
@@ -59,6 +65,7 @@ router.post("/", async (req, res) => {
         network,
         status: "queued",
         paramsJson: { address: normalizedAddress, network, maxDepth },
+        userId: req.userId, // Associate with authenticated user
       },
     });
 
@@ -84,23 +91,34 @@ router.post("/", async (req, res) => {
 // GET /api/analyze/:jobId/status - Get job status
 // ============================================
 
-router.get("/:jobId/status", async (req, res) => {
+router.get("/:jobId/status", authenticateToken, async (req: AuthRequest, res) => {
   const { jobId } = req.params;
   logger.debug(`[Route] GET /api/analyze/${jobId}/status`);
 
   try {
+    if (!req.userId) {
+      logger.warn(`[Route] No userId in request`);
+      return res.status(401).json({ error: "Authentication required" });
+    }
+
     // Get job status from queue
     const queueStatus = await getJobStatus(jobId);
 
     // Get analysis status from database
     const analysis = await prisma.analysis.findUnique({
       where: { id: jobId },
-      select: { id: true, status: true, error: true },
+      select: { id: true, status: true, error: true, userId: true },
     });
 
     if (!analysis) {
       logger.warn(`[Route] Analysis not found: ${jobId}`);
       return res.status(404).json({ error: "Analysis not found" });
+    }
+
+    // Ensure user can only access their own analyses
+    if (analysis.userId !== req.userId) {
+      logger.warn(`[Route] User ${req.userId} attempted to access analysis ${jobId} owned by ${analysis.userId || "null"}`);
+      return res.status(403).json({ error: "Access denied" });
     }
 
     logger.debug(`[Route] Status for ${jobId}: ${analysis.status}, progress: ${queueStatus.progress}%`);
@@ -122,11 +140,16 @@ router.get("/:jobId/status", async (req, res) => {
 // GET /api/analysis/:analysisId/graph - Get graph data
 // ============================================
 
-router.get("/:analysisId/graph", async (req, res) => {
+router.get("/:analysisId/graph", authenticateToken, async (req: AuthRequest, res) => {
   const { analysisId } = req.params;
   logger.info(`[Route] GET /api/analysis/${analysisId}/graph`);
 
   try {
+    if (!req.userId) {
+      logger.warn(`[Route] No userId in request`);
+      return res.status(401).json({ error: "Authentication required" });
+    }
+
     const analysis = await prisma.analysis.findUnique({
       where: { id: analysisId },
     });
@@ -134,6 +157,12 @@ router.get("/:analysisId/graph", async (req, res) => {
     if (!analysis) {
       logger.warn(`[Route] Analysis not found: ${analysisId}`);
       return res.status(404).json({ error: "Analysis not found" });
+    }
+
+    // Ensure user can only access their own analyses
+    if (analysis.userId !== req.userId) {
+      logger.warn(`[Route] User ${req.userId} attempted to access analysis ${analysisId} owned by ${analysis.userId || "null"}`);
+      return res.status(403).json({ error: "Access denied" });
     }
 
     // If we have cached graph data, return it
@@ -164,11 +193,16 @@ router.get("/:analysisId/graph", async (req, res) => {
 // GET /api/analysis/:analysisId/summary - Get AI summary
 // ============================================
 
-router.get("/:analysisId/summary", async (req, res) => {
+router.get("/:analysisId/summary", authenticateToken, async (req: AuthRequest, res) => {
   const { analysisId } = req.params;
   logger.info(`[Route] GET /api/analysis/${analysisId}/summary`);
 
   try {
+    if (!req.userId) {
+      logger.warn(`[Route] No userId in request`);
+      return res.status(401).json({ error: "Authentication required" });
+    }
+
     const analysis = await prisma.analysis.findUnique({
       where: { id: analysisId },
     });
@@ -176,6 +210,12 @@ router.get("/:analysisId/summary", async (req, res) => {
     if (!analysis) {
       logger.warn(`[Route] Analysis not found: ${analysisId}`);
       return res.status(404).json({ error: "Analysis not found" });
+    }
+
+    // Ensure user can only access their own analyses
+    if (analysis.userId !== req.userId) {
+      logger.warn(`[Route] User ${req.userId} attempted to access analysis ${analysisId} owned by ${analysis.userId || "null"}`);
+      return res.status(403).json({ error: "Access denied" });
     }
 
     logger.info(`[Route] Fetching AI summary...`);
@@ -198,11 +238,30 @@ router.get("/:analysisId/summary", async (req, res) => {
 // GET /api/analysis/:analysisId/contract/:address/explanation
 // ============================================
 
-router.get("/:analysisId/contract/:address/explanation", async (req, res) => {
+router.get("/:analysisId/contract/:address/explanation", authenticateToken, async (req: AuthRequest, res) => {
   const { analysisId, address } = req.params;
   logger.info(`[Route] GET /api/analysis/${analysisId}/contract/${address}/explanation`);
 
   try {
+    if (!req.userId) {
+      logger.warn(`[Route] No userId in request`);
+      return res.status(401).json({ error: "Authentication required" });
+    }
+
+    // Verify user owns this analysis
+    const analysis = await prisma.analysis.findUnique({
+      where: { id: analysisId },
+      select: { userId: true },
+    });
+
+    if (!analysis) {
+      return res.status(404).json({ error: "Analysis not found" });
+    }
+
+    if (analysis.userId !== req.userId) {
+      logger.warn(`[Route] User ${req.userId} attempted to access analysis ${analysisId} owned by ${analysis.userId}`);
+      return res.status(403).json({ error: "Access denied" });
+    }
     logger.info(`[Route] Generating contract explanation...`);
     const explanation = await generateContractExplanation(analysisId, address);
 
@@ -218,11 +277,30 @@ router.get("/:analysisId/contract/:address/explanation", async (req, res) => {
 // GET /api/analysis/:analysisId/contract/:address/details
 // ============================================
 
-router.get("/:analysisId/contract/:address/details", async (req, res) => {
+router.get("/:analysisId/contract/:address/details", authenticateToken, async (req: AuthRequest, res) => {
   const { analysisId, address } = req.params;
   logger.info(`[Route] GET /api/analysis/${analysisId}/contract/${address}/details`);
 
   try {
+    if (!req.userId) {
+      logger.warn(`[Route] No userId in request`);
+      return res.status(401).json({ error: "Authentication required" });
+    }
+
+    // Verify user owns this analysis
+    const analysis = await prisma.analysis.findUnique({
+      where: { id: analysisId },
+      select: { userId: true },
+    });
+
+    if (!analysis) {
+      return res.status(404).json({ error: "Analysis not found" });
+    }
+
+    if (analysis.userId !== req.userId) {
+      logger.warn(`[Route] User ${req.userId} attempted to access analysis ${analysisId} owned by ${analysis.userId}`);
+      return res.status(403).json({ error: "Access denied" });
+    }
     const details = await getContractDetails(analysisId, address);
 
     if (!details.contract) {
@@ -239,14 +317,23 @@ router.get("/:analysisId/contract/:address/details", async (req, res) => {
 });
 
 // ============================================
-// GET /api/analysis/history - Get all analyses
+// GET /api/analysis/history - Get user's analyses
 // ============================================
 
-router.get("/history", async (_req, res) => {
+router.get("/history", authenticateToken, async (req: AuthRequest, res) => {
   logger.info(`[Route] GET /api/analysis/history`);
 
   try {
+    if (!req.userId) {
+      logger.warn(`[Route] No userId in request`);
+      return res.status(401).json({ error: "Authentication required" });
+    }
+
+    // Only return analyses for the authenticated user
     const analyses = await prisma.analysis.findMany({
+      where: {
+        userId: req.userId,
+      },
       orderBy: { createdAt: "desc" },
       take: 100,
       select: {
@@ -266,7 +353,7 @@ router.get("/history", async (_req, res) => {
       createdAt: a.createdAt.toISOString(),
     }));
 
-    logger.info(`[Route] ✅ Returning ${history.length} analyses`);
+    logger.info(`[Route] ✅ Returning ${history.length} analyses for user ${req.userId}`);
     return res.json(history);
   } catch (error) {
     logger.error("[Route] ❌ Failed to get analysis history:", error);
@@ -278,11 +365,16 @@ router.get("/history", async (_req, res) => {
 // GET /api/analysis/:analysisId - Get analysis details
 // ============================================
 
-router.get("/:analysisId", async (req, res) => {
+router.get("/:analysisId", authenticateToken, async (req: AuthRequest, res) => {
   const { analysisId } = req.params;
   logger.info(`[Route] GET /api/analysis/${analysisId}`);
 
   try {
+    if (!req.userId) {
+      logger.warn(`[Route] No userId in request`);
+      return res.status(401).json({ error: "Authentication required" });
+    }
+
     const analysis = await prisma.analysis.findUnique({
       where: { id: analysisId },
       include: {
@@ -308,6 +400,12 @@ router.get("/:analysisId", async (req, res) => {
     if (!analysis) {
       logger.warn(`[Route] Analysis not found: ${analysisId}`);
       return res.status(404).json({ error: "Analysis not found" });
+    }
+
+    // Ensure user can only access their own analyses
+    if (analysis.userId !== req.userId) {
+      logger.warn(`[Route] User ${req.userId} attempted to access analysis ${analysisId} owned by ${analysis.userId || "null"}`);
+      return res.status(403).json({ error: "Access denied" });
     }
 
     logger.info(`[Route] ✅ Analysis details: ${analysis.contracts.length} contracts`);

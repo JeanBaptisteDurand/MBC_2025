@@ -66,6 +66,7 @@ const x402Routes = {
 };
 
 // Apply x402 payment middleware to this router
+// x402 handles payment verification, no JWT authentication needed
 router.use(paymentMiddleware(payToAddress, x402Routes, facilitatorConfig));
 
 // ============================================

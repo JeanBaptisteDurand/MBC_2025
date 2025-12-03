@@ -1,16 +1,8 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { Search, ChevronDown, Loader2 } from "lucide-react";
-import {
-  Transaction,
-  TransactionButton,
-  TransactionStatus,
-  TransactionStatusAction,
-  TransactionStatusLabel,
-} from "@coinbase/onchainkit/transaction";
-import type { LifecycleStatus } from "@coinbase/onchainkit/transaction";
 import { parseEther, encodeFunctionData, createPublicClient, http } from "viem";
 import { base, baseSepolia } from "viem/chains";
-import { useAccount } from "wagmi";
+import { useAccount, useChainId, useSwitchChain, useWriteContract, useWaitForTransactionReceipt } from "wagmi";
 import type { Network } from "@baselens/core";
 import { cn } from "../utils/cn";
 import { useSmartWallet } from "../providers/SmartWalletProvider";
@@ -46,7 +38,15 @@ export default function AnalyzeForm({ onAnalyze }: AnalyzeFormProps) {
   const [isProcessingPayment, setIsProcessingPayment] = useState(false);
   const [isCheckingContract, setIsCheckingContract] = useState(false);
   const { isSmartWalletActive, sendSmartWalletPayment } = useSmartWallet();
-  const { isConnected } = useAccount();
+  const { isConnected, address: walletAddress } = useAccount();
+  const chainId = useChainId();
+  const { switchChain } = useSwitchChain();
+
+  // Use wagmi's useWriteContract for EOA transactions
+  const { writeContract, data: hash, isPending, error: writeError } = useWriteContract();
+  const { isLoading: isConfirming, isSuccess } = useWaitForTransactionReceipt({
+    hash,
+  });
 
   const validateForm = (): boolean => {
     setError("");
@@ -137,33 +137,37 @@ export default function AnalyzeForm({ onAnalyze }: AnalyzeFormProps) {
     }
   };
 
-  // Encode the pay(text) function call with the contract address being analyzed
-  const payData = encodeFunctionData({
-    abi: payAbi,
-    functionName: "pay",
-    args: [address.trim() || "BaseLens Analysis"],
-  });
+  // Handle EOA wallet payment
+  const handleEOAPayment = useCallback(() => {
+    if (!isConnected || chainId !== baseSepolia.id) {
+      setError("Please connect your wallet and switch to Base Sepolia");
+      return;
+    }
 
-  const calls = [
-    {
-      to: PAY_CONTRACT_ADDRESS,
-      data: payData,
-      value: PAY_AMOUNT, // 0.01 ETH
-    },
-  ];
+    setError(""); // Clear any previous errors
 
-  const handleOnStatus = useCallback(
-    (status: LifecycleStatus) => {
-      console.log("Transaction status:", status);
-      if (status.statusName === "success") {
-        // Transaction confirmed, now call the backend
-        const trimmedAddress = address.trim();
-        onAnalyze(trimmedAddress, network);
-        setIsValidated(false); // Reset for next analysis
-      }
-    },
-    [address, network, onAnalyze]
-  );
+    const trimmedAddress = address.trim();
+
+    // Use writeContract for the payable function call
+    writeContract({
+      address: PAY_CONTRACT_ADDRESS,
+      abi: payAbi,
+      functionName: "pay",
+      args: [trimmedAddress || "BaseLens Analysis"],
+      value: PAY_AMOUNT,
+      chainId: baseSepolia.id,
+    });
+  }, [isConnected, chainId, address, writeContract]);
+
+  // Handle successful transaction
+  useEffect(() => {
+    if (isSuccess && hash) {
+      // Transaction confirmed, now call the backend
+      const trimmedAddress = address.trim();
+      onAnalyze(trimmedAddress, network);
+      setIsValidated(false); // Reset for next analysis
+    }
+  }, [isSuccess, hash, address, network, onAnalyze]);
 
   const handleSmartWalletPayment = useCallback(async () => {
     if (!isSmartWalletActive) {
@@ -304,20 +308,60 @@ export default function AnalyzeForm({ onAnalyze }: AnalyzeFormProps) {
           </div>
         ) : (
           <div className="space-y-2">
-            <p className="text-sm text-surface-400 text-center">
-              Confirm transaction to start analysis
-            </p>
-            <Transaction
-              chainId={network === "base-mainnet" ? base.id : baseSepolia.id}
-              calls={calls}
-              onStatus={handleOnStatus}
-            >
-              <TransactionButton className="btn btn-primary w-full btn-lg" />
-              <TransactionStatus>
-                <TransactionStatusLabel />
-                <TransactionStatusAction />
-              </TransactionStatus>
-            </Transaction>
+            {chainId !== baseSepolia.id ? (
+              <div className="space-y-2">
+                <p className="text-sm text-surface-400 text-center">
+                  Please switch to Base Sepolia to proceed
+                </p>
+                <button
+                  onClick={async () => {
+                    try {
+                      await switchChain({ chainId: baseSepolia.id });
+                    } catch (error: any) {
+                      setError(error?.message || "Failed to switch chain. Please switch to Base Sepolia manually.");
+                    }
+                  }}
+                  className="btn btn-primary w-full btn-lg"
+                >
+                  Switch to Base Sepolia
+                </button>
+                {error && (
+                  <p className="text-sm text-red-400 text-center">{error}</p>
+                )}
+              </div>
+            ) : (
+              <>
+                <p className="text-sm text-surface-400 text-center">
+                  {isPending || isConfirming
+                    ? "Processing transaction..."
+                    : "Confirm transaction to start analysis"}
+                </p>
+                <button
+                  onClick={handleEOAPayment}
+                  disabled={isPending || isConfirming || !isConnected}
+                  className="btn btn-primary w-full btn-lg"
+                >
+                  {isPending || isConfirming ? (
+                    <>
+                      <Loader2 className="w-5 h-5 animate-spin" />
+                      <span>{isPending ? "Confirming..." : "Processing..."}</span>
+                    </>
+                  ) : (
+                    "Pay & Start Analysis"
+                  )}
+                </button>
+                {(error || writeError) && (
+                  <p className="text-sm text-red-400 text-center">
+                    {error || writeError?.message || "Transaction failed. Please try again."}
+                  </p>
+                )}
+                {isSuccess && (
+                  <p className="text-sm text-green-400 text-center">
+                    Transaction confirmed! Starting analysis...
+                  </p>
+                )}
+              </>
+            )}
           </div>
         )}
       </div>

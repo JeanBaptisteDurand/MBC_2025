@@ -14,6 +14,7 @@ import ragRoutes from "./routes/rag.js";
 import chatRagRoutes from "./routes/chat-rag.js";
 import sourceRoutes from "./routes/source.js";
 import userRoutes from "./routes/users.js";
+import authRoutes from "./routes/auth.js";
 import { isPanoramixAvailable } from "./base/decompiler.js";
 
 const app = express();
@@ -34,6 +35,7 @@ app.get("/health", (_, res) => {
 });
 
 // API Routes
+app.use("/api/auth", authRoutes); // Auth routes: /api/auth/login
 app.use("/api/analyze", analysisRoutes);
 app.use("/api/analysis", analysisRoutes);
 app.use("/api/rag", ragRoutes);

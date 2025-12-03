@@ -60,6 +60,7 @@ services:
       BASESCAN_API_KEY: ${BASESCAN_API_KEY}
       SERVER_PAY_TO_ADDRESS: ${SERVER_PAY_TO_ADDRESS:-0x7d85bf7a82470837a1d832e4fa503a7ebf20ca97}
       X402_FACILITATOR_URL: ${X402_FACILITATOR_URL:-https://x402.org/facilitator}
+      JWT_SECRET: ${JWT_SECRET}
     ports:
       - "3001:3001"
     volumes:

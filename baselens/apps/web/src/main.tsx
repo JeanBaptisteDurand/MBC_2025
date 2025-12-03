@@ -7,6 +7,7 @@ import { ThemeProvider } from "./hooks/useTheme";
 import { ToastProvider } from "./components/ui/Toast";
 import { OnchainKitProvider } from "./providers/OnchainKitProvider";
 import { SmartWalletProvider } from "./providers/SmartWalletProvider";
+import { AuthProvider } from "./contexts/AuthContext";
 import "@coinbase/onchainkit/styles.css";
 import "./styles/index.css";
 
@@ -32,13 +33,15 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
           bundlerUrl={ZERODEV_BUNDLER_URL}
           paymasterUrl={ZERODEV_PAYMASTER_URL}
         >
-          <BrowserRouter>
-            <ThemeProvider>
-              <ToastProvider>
-                <App />
-              </ToastProvider>
-            </ThemeProvider>
-          </BrowserRouter>
+          <AuthProvider>
+            <BrowserRouter>
+              <ThemeProvider>
+                <ToastProvider>
+                  <App />
+                </ToastProvider>
+              </ThemeProvider>
+            </BrowserRouter>
+          </AuthProvider>
         </SmartWalletProvider>
       </OnchainKitProvider>
     </QueryClientProvider>

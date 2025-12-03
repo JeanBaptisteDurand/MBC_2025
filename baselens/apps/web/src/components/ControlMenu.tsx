@@ -9,8 +9,10 @@ import {
   FileCode,
   Boxes,
   RefreshCw,
+  FileText,
 } from "lucide-react";
 import { cn } from "../utils/cn";
+import type { GraphData, ContractNode as ContractNodeData } from "@baselens/core";
 
 interface ControlMenuProps {
   visibleNodeKinds: Set<string>;
@@ -19,6 +21,9 @@ interface ControlMenuProps {
   onToggleEdgeKind: (kind: string) => void;
   onApply: () => void;
   onPresetChange?: (preset: ViewPreset) => void;
+  graphData?: GraphData;
+  hiddenContractIds: Set<string>;
+  onToggleContract: (contractId: string) => void;
 }
 
 // View presets for quick configuration
@@ -51,27 +56,6 @@ export const VIEW_PRESETS: ViewPreset[] = [
     description: "Contracts with their source files",
     nodeKinds: ["contract", "sourceFile"],
     edgeKinds: ["IS_PROXY_OF", "HAS_SOURCE_FILE", "SOURCE_DECLARED_IMPL", "CREATED_BY"],
-  },
-  {
-    name: "Type Hierarchy",
-    description: "Focus on inheritance and types",
-    nodeKinds: ["contract", "sourceFile", "typeDef"],
-    edgeKinds: [
-      "HAS_SOURCE_FILE", "DECLARES_TYPE", "DEFINED_BY", "IMPLEMENTS_INTERFACE",
-      "EXTENDS_CONTRACT", "USES_LIBRARY", "USES_TYPE_INTERFACE"
-    ],
-  },
-  {
-    name: "Factory Relations",
-    description: "Focus on deployment and creation",
-    nodeKinds: ["contract", "address"],
-    edgeKinds: ["CREATED_BY", "CREATED"],
-  },
-  {
-    name: "Proxy Architecture",
-    description: "Proxy patterns and implementations",
-    nodeKinds: ["contract"],
-    edgeKinds: ["IS_PROXY_OF", "CALLS_RUNTIME", "SOURCE_DECLARED_IMPL"],
   },
 ];
 
@@ -144,9 +128,21 @@ export default function ControlMenu({
   onToggleEdgeKind,
   onApply,
   onPresetChange,
+  graphData,
+  hiddenContractIds,
+  onToggleContract,
 }: ControlMenuProps) {
   const [isOpen, setIsOpen] = useState(false);
-  const [activeTab, setActiveTab] = useState<"presets" | "nodes" | "edges">("presets");
+  const [activeTab, setActiveTab] = useState<"presets" | "nodes" | "edges" | "contracts">("presets");
+
+  // Get all contracts excluding EOA wallets
+  const contracts = graphData?.nodes
+    .filter((node) => {
+      if (node.kind !== "contract") return false;
+      const contractNode = node as ContractNodeData;
+      return contractNode.kindOnChain !== "EOA";
+    })
+    .map((node) => node as ContractNodeData) || [];
 
   const applyPreset = (preset: ViewPreset) => {
     // Get all current items
@@ -284,6 +280,17 @@ export default function ControlMenu({
             >
               Edges
             </button>
+            <button
+              onClick={() => setActiveTab("contracts")}
+              className={cn(
+                "flex-1 py-2.5 text-xs font-medium transition-colors",
+                activeTab === "contracts"
+                  ? "text-primary-400 border-b-2 border-primary-400 bg-surface-800/30"
+                  : "text-surface-400 hover:text-surface-200 hover:bg-surface-800/20"
+              )}
+            >
+              Contracts
+            </button>
           </div>
 
           {/* Content */}
@@ -354,7 +361,7 @@ export default function ControlMenu({
                   </div>
                 ))}
               </>
-            ) : (
+            ) : activeTab === "edges" ? (
               <>
                 {/* Quick toggle for all edges */}
                 <div className="mb-4 flex items-center justify-between">
@@ -392,6 +399,50 @@ export default function ControlMenu({
                     </div>
                   </div>
                 ))}
+              </>
+            ) : (
+              <>
+                {/* Contracts tab */}
+                <div className="mb-4 flex items-center gap-2">
+                  <FileText className="w-4 h-4 text-surface-400" />
+                  <span className="text-xs text-surface-500">
+                    {contracts.length} contracts (excluding EOA wallets)
+                  </span>
+                </div>
+                <div className="space-y-2">
+                  {contracts.length === 0 ? (
+                    <p className="text-xs text-surface-500 text-center py-4">
+                      No contracts available
+                    </p>
+                  ) : (
+                    contracts.map((contract) => {
+                      const isHidden = hiddenContractIds.has(contract.id);
+                      const contractType = contract.kindOnChain || "CONTRACT_SIMPLE";
+                      const contractLabel = contract.label || contract.address || contract.id;
+
+                      return (
+                        <FilterCheckbox
+                          key={contract.id}
+                          label={contractLabel}
+                          description={`${contractType}${contract.isFactory ? " · Factory" : ""}${contract.isRoot ? " · Root" : ""}`}
+                          color={
+                            contract.isRoot
+                              ? "#f97316"
+                              : contract.kindOnChain === "PROXY"
+                                ? "#8b5cf6"
+                                : contract.kindOnChain === "IMPLEMENTATION"
+                                  ? "#3b82f6"
+                                  : contract.isFactory
+                                    ? "#22c55e"
+                                    : "#6b7280"
+                          }
+                          checked={!isHidden}
+                          onChange={() => onToggleContract(contract.id)}
+                        />
+                      );
+                    })
+                  )}
+                </div>
               </>
             )}
           </div>

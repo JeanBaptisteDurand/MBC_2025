@@ -3,7 +3,7 @@ import { useAccount, useWalletClient, useChainId, useSwitchChain } from "wagmi";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { baseSepolia } from "viem/chains";
 import { createPublicClient, http, parseAbiItem, parseEther, formatEther, encodeFunctionData, formatUnits, parseUnits } from "viem";
-import { Wallet, Calendar, Coins, FileText, ExternalLink, Smartphone, CheckCircle2, XCircle, Loader2, ArrowDown } from "lucide-react";
+import { Wallet, Calendar, Coins, FileText, ExternalLink, Smartphone, CheckCircle2, XCircle, Loader2, ArrowDown, ArrowUp } from "lucide-react";
 import { shortenAddress, getBasescanTxUrl } from "../utils/explorers";
 import { cn } from "../utils/cn";
 import { useSmartWallet } from "../providers/SmartWalletProvider";
@@ -33,6 +33,7 @@ interface PaymentEvent {
 
 export default function Profile() {
   const { address, isConnected } = useAccount();
+  const { data: walletClient } = useWalletClient();
   const {
     smartWalletAddress,
     isSmartWalletActive,
@@ -257,32 +258,41 @@ export default function Profile() {
                     )}
                   </button>
                 ) : (
-                  <button
-                    onClick={async () => {
-                      setIsActivating(true);
-                      try {
-                        await activateSmartWallet();
-                        // Refetch user profile to sync state
-                        await refetchUserProfile();
-                      } catch (error) {
-                        console.error("Failed to activate smart wallet:", error);
-                        alert("Failed to activate smart wallet. Please try again.");
-                      } finally {
-                        setIsActivating(false);
-                      }
-                    }}
-                    disabled={isActivating || isInitializing}
-                    className="btn btn-primary w-full"
-                  >
-                    {isActivating || isInitializing ? (
-                      <>
-                        <Loader2 className="w-4 h-4 animate-spin" />
-                        <span>Activating...</span>
-                      </>
-                    ) : (
-                      "Activate Smart Wallet"
-                    )}
-                  </button>
+                  <div className="space-y-2">
+                    <button
+                      onClick={async () => {
+                        if (!walletClient) {
+                          alert("Wallet is not ready yet. Please wait a moment and try again, or reconnect your wallet.");
+                          return;
+                        }
+                        setIsActivating(true);
+                        try {
+                          await activateSmartWallet();
+                          // Refetch user profile to sync state
+                          await refetchUserProfile();
+                        } catch (error: any) {
+                          console.error("Failed to activate smart wallet:", error);
+                          alert(error?.message || "Failed to activate smart wallet. Please try again.");
+                        } finally {
+                          setIsActivating(false);
+                        }
+                      }}
+                      disabled={isActivating || isInitializing || !walletClient}
+                      className="btn btn-primary w-full"
+                    >
+                      {isActivating || isInitializing ? (
+                        <>
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                          <span>Activating...</span>
+                        </>
+                      ) : (
+                        "Activate Smart Wallet"
+                      )}
+                    </button>
+                    <p className="text-xs text-surface-500 text-center">
+                      If you enable and fund the smart wallet, you won't pay gas for future analysis and it will consume your smart wallet balance
+                    </p>
+                  </div>
                 )}
 
                 {/* Fund Smart Wallet Component */}
@@ -355,6 +365,7 @@ function FundSmartWallet({
   const chainId = useChainId();
   const { switchChain } = useSwitchChain();
   const queryClient = useQueryClient();
+  const { kernelClient, sendSmartWalletPayment } = useSmartWallet();
 
   // Create public client for Base Sepolia
   const publicClient = createPublicClient({
@@ -439,6 +450,88 @@ function FundSmartWallet({
     refetchInterval: 5000, // Refetch every 5 seconds
   });
 
+  // Get current balance of EOA wallet
+  const { data: eoaBalance } = useQuery({
+    queryKey: ["eoaBalance", eoaAddress],
+    queryFn: async () => {
+      if (!eoaAddress) return null;
+      const balance = await publicClient.getBalance({
+        address: eoaAddress as `0x${string}`,
+      });
+      return balance;
+    },
+    enabled: !!eoaAddress,
+    refetchInterval: 5000, // Refetch every 5 seconds
+  });
+
+  const [isRetrieving, setIsRetrieving] = useState(false);
+
+  const handleRetrieve = async () => {
+    if (!eoaAddress || !isSmartWalletActive || !smartWalletAddress || !kernelClient) {
+      setError("Smart wallet must be active to retrieve funds");
+      return;
+    }
+
+    setIsRetrieving(true);
+    setError("");
+
+    try {
+      // Get smart wallet balance
+      const balance = await publicClient.getBalance({
+        address: smartWalletAddress as `0x${string}`,
+      });
+
+      if (balance === 0n) {
+        setError("Smart wallet has no ETH to retrieve");
+        setIsRetrieving(false);
+        return;
+      }
+
+      // Reserve some ETH for gas (0.0001 ETH should be enough)
+      const gasReserve = parseEther("0.0001");
+      const amountToRetrieve = balance > gasReserve ? balance - gasReserve : 0n;
+
+      if (amountToRetrieve === 0n) {
+        setError("Smart wallet balance is too low to retrieve (need to reserve gas)");
+        setIsRetrieving(false);
+        return;
+      }
+
+      console.log(`[FundSmartWallet] Retrieving ${formatEther(amountToRetrieve)} ETH from smart wallet to EOA`);
+
+      // Use smart wallet to send ETH back to EOA
+      const txHash = await sendSmartWalletPayment([
+        {
+          to: eoaAddress as `0x${string}`,
+          value: amountToRetrieve,
+          data: "0x" as `0x${string}`,
+        },
+      ]);
+
+      console.log(`[FundSmartWallet] Retrieve transaction sent: ${txHash}`);
+
+      // Wait for transaction confirmation
+      const receipt = await publicClient.waitForTransactionReceipt({
+        hash: txHash,
+      });
+
+      if (receipt.status === "success") {
+        console.log(`[FundSmartWallet] Retrieve confirmed. ${formatEther(amountToRetrieve)} ETH retrieved to EOA.`);
+        // Invalidate balance queries to refresh
+        queryClient.invalidateQueries({ queryKey: ["smartWalletBalance", smartWalletAddress] });
+        queryClient.invalidateQueries({ queryKey: ["eoaBalance", eoaAddress] });
+        setError("");
+      } else {
+        throw new Error("Retrieve transaction failed");
+      }
+    } catch (error: any) {
+      console.error("[FundSmartWallet] Error retrieving ETH:", error);
+      setError(error?.message || "Failed to retrieve ETH. Please try again.");
+    } finally {
+      setIsRetrieving(false);
+    }
+  };
+
   const amountPerAnalysis = parseEther("0.0001");
   const totalAmount = amountPerAnalysis * BigInt(numberOfAnalyses);
 
@@ -453,15 +546,25 @@ function FundSmartWallet({
         Transfer ETH from your EOA to your smart wallet for sponsored gas transactions
       </p>
 
-      {/* Current Balance */}
-      {smartWalletBalance !== undefined && (
-        <div className="mb-3 p-2 rounded-lg bg-surface-800/50">
-          <p className="text-xs text-surface-500">Current Balance</p>
-          <p className="text-sm font-mono text-surface-200">
-            {formatEther(smartWalletBalance)} ETH
-          </p>
-        </div>
-      )}
+      {/* Current Balances */}
+      <div className="mb-3 space-y-2">
+        {eoaBalance !== undefined && eoaBalance !== null && (
+          <div className="p-2 rounded-lg bg-surface-800/50">
+            <p className="text-xs text-surface-500">Your EOA Balance</p>
+            <p className="text-sm font-mono text-surface-200">
+              {formatEther(eoaBalance)} ETH
+            </p>
+          </div>
+        )}
+        {smartWalletBalance !== undefined && smartWalletBalance !== null && (
+          <div className="p-2 rounded-lg bg-surface-800/50">
+            <p className="text-xs text-surface-500">Smart Wallet Balance</p>
+            <p className="text-sm font-mono text-surface-200">
+              {formatEther(smartWalletBalance)} ETH
+            </p>
+          </div>
+        )}
+      </div>
 
       {/* Number of Analyses Input */}
       <div className="mb-3">
@@ -495,27 +598,49 @@ function FundSmartWallet({
         </div>
       )}
 
-      {/* Transfer Button */}
-      <button
-        onClick={handleFund}
-        disabled={!isSmartWalletActive || isTransferring || numberOfAnalyses < 1}
-        className={cn(
-          "btn w-full",
-          isSmartWalletActive ? "btn-primary" : "btn-secondary opacity-50 cursor-not-allowed"
-        )}
-      >
-        {isTransferring ? (
-          <>
-            <Loader2 className="w-4 h-4 animate-spin" />
-            <span>Transferring...</span>
-          </>
-        ) : (
-          <>
-            <ArrowDown className="w-4 h-4" />
-            <span>Transfer {formatEther(totalAmount)} ETH</span>
-          </>
-        )}
-      </button>
+      {/* Transfer and Retrieve Buttons */}
+      <div className="flex gap-2">
+        <button
+          onClick={handleFund}
+          disabled={!isSmartWalletActive || isTransferring || numberOfAnalyses < 1}
+          className={cn(
+            "btn flex-1",
+            isSmartWalletActive ? "btn-primary" : "btn-secondary opacity-50 cursor-not-allowed"
+          )}
+        >
+          {isTransferring ? (
+            <>
+              <Loader2 className="w-4 h-4 animate-spin" />
+              <span>Transferring...</span>
+            </>
+          ) : (
+            <>
+              <ArrowDown className="w-4 h-4" />
+              <span>Transfer {formatEther(totalAmount)} ETH</span>
+            </>
+          )}
+        </button>
+        <button
+          onClick={handleRetrieve}
+          disabled={!isSmartWalletActive || isRetrieving || !smartWalletBalance || smartWalletBalance === 0n}
+          className={cn(
+            "btn flex-1",
+            isSmartWalletActive && smartWalletBalance && smartWalletBalance > 0n ? "btn-secondary" : "btn-secondary opacity-50 cursor-not-allowed"
+          )}
+        >
+          {isRetrieving ? (
+            <>
+              <Loader2 className="w-4 h-4 animate-spin" />
+              <span>Retrieving...</span>
+            </>
+          ) : (
+            <>
+              <ArrowUp className="w-4 h-4" />
+              <span>Retrieve</span>
+            </>
+          )}
+        </button>
+      </div>
 
       {!isSmartWalletActive && (
         <p className="text-xs text-surface-500 mt-2 text-center">
@@ -573,6 +698,7 @@ function FundSmartWalletUSDC({
   const chainId = useChainId();
   const { switchChain } = useSwitchChain();
   const queryClient = useQueryClient();
+  const { kernelClient, sendSmartWalletPayment } = useSmartWallet();
 
   // Create public client for Base Sepolia
   const publicClient = createPublicClient({
@@ -718,6 +844,67 @@ function FundSmartWalletUSDC({
     ? parseUnits(usdcAmount, USDC_DECIMALS)
     : 0n;
 
+  const [isRetrieving, setIsRetrieving] = useState(false);
+
+  const handleRetrieve = async () => {
+    if (!eoaAddress || !isSmartWalletActive || !smartWalletAddress || !kernelClient) {
+      setError("Smart wallet must be active to retrieve funds");
+      return;
+    }
+
+    setIsRetrieving(true);
+    setError("");
+
+    try {
+      // Get smart wallet USDC balance
+      if (!smartWalletUSDCBalance || smartWalletUSDCBalance === 0n) {
+        setError("Smart wallet has no USDC to retrieve");
+        setIsRetrieving(false);
+        return;
+      }
+
+      console.log(`[FundSmartWalletUSDC] Retrieving ${formatUnits(smartWalletUSDCBalance, USDC_DECIMALS)} USDC from smart wallet to EOA`);
+
+      // Encode the transfer function call to send USDC from smart wallet to EOA
+      const transferData = encodeFunctionData({
+        abi: erc20Abi,
+        functionName: "transfer",
+        args: [eoaAddress as `0x${string}`, smartWalletUSDCBalance],
+      });
+
+      // Use smart wallet to send USDC back to EOA
+      const txHash = await sendSmartWalletPayment([
+        {
+          to: USDC_CONTRACT_ADDRESS as `0x${string}`,
+          value: 0n,
+          data: transferData,
+        },
+      ]);
+
+      console.log(`[FundSmartWalletUSDC] Retrieve transaction sent: ${txHash}`);
+
+      // Wait for transaction confirmation
+      const receipt = await publicClient.waitForTransactionReceipt({
+        hash: txHash,
+      });
+
+      if (receipt.status === "success") {
+        console.log(`[FundSmartWalletUSDC] Retrieve confirmed. ${formatUnits(smartWalletUSDCBalance, USDC_DECIMALS)} USDC retrieved to EOA.`);
+        // Invalidate balance queries to refresh
+        queryClient.invalidateQueries({ queryKey: ["smartWalletUSDCBalance", smartWalletAddress] });
+        queryClient.invalidateQueries({ queryKey: ["eoaUSDCBalance", eoaAddress] });
+        setError("");
+      } else {
+        throw new Error("Retrieve transaction failed");
+      }
+    } catch (error: any) {
+      console.error("[FundSmartWalletUSDC] Error retrieving USDC:", error);
+      setError(error?.message || "Failed to retrieve USDC. Please try again.");
+    } finally {
+      setIsRetrieving(false);
+    }
+  };
+
   return (
     <div className="border-t border-surface-700 pt-4 mt-4">
       <div className="flex items-center gap-2 mb-3">
@@ -776,27 +963,49 @@ function FundSmartWalletUSDC({
         </div>
       )}
 
-      {/* Transfer Button */}
-      <button
-        onClick={handleFund}
-        disabled={!isSmartWalletActive || isTransferring || !usdcAmount || parseFloat(usdcAmount) <= 0}
-        className={cn(
-          "btn w-full",
-          isSmartWalletActive ? "btn-primary" : "btn-secondary opacity-50 cursor-not-allowed"
-        )}
-      >
-        {isTransferring ? (
-          <>
-            <Loader2 className="w-4 h-4 animate-spin" />
-            <span>Transferring...</span>
-          </>
-        ) : (
-          <>
-            <ArrowDown className="w-4 h-4" />
-            <span>Transfer {usdcAmount || "0"} USDC</span>
-          </>
-        )}
-      </button>
+      {/* Transfer and Retrieve Buttons */}
+      <div className="flex gap-2">
+        <button
+          onClick={handleFund}
+          disabled={!isSmartWalletActive || isTransferring || !usdcAmount || parseFloat(usdcAmount) <= 0}
+          className={cn(
+            "btn flex-1",
+            isSmartWalletActive ? "btn-primary" : "btn-secondary opacity-50 cursor-not-allowed"
+          )}
+        >
+          {isTransferring ? (
+            <>
+              <Loader2 className="w-4 h-4 animate-spin" />
+              <span>Transferring...</span>
+            </>
+          ) : (
+            <>
+              <ArrowDown className="w-4 h-4" />
+              <span>Transfer {usdcAmount || "0"} USDC</span>
+            </>
+          )}
+        </button>
+        <button
+          onClick={handleRetrieve}
+          disabled={!isSmartWalletActive || isRetrieving || !smartWalletUSDCBalance || smartWalletUSDCBalance === 0n}
+          className={cn(
+            "btn flex-1",
+            isSmartWalletActive && smartWalletUSDCBalance && smartWalletUSDCBalance > 0n ? "btn-secondary" : "btn-secondary opacity-50 cursor-not-allowed"
+          )}
+        >
+          {isRetrieving ? (
+            <>
+              <Loader2 className="w-4 h-4 animate-spin" />
+              <span>Retrieving...</span>
+            </>
+          ) : (
+            <>
+              <ArrowUp className="w-4 h-4" />
+              <span>Retrieve</span>
+            </>
+          )}
+        </button>
+      </div>
 
       {!isSmartWalletActive && (
         <p className="text-xs text-surface-500 mt-2 text-center">

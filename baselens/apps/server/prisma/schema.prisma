@@ -26,8 +26,10 @@ model Analysis {
   summaryJson Json?    // Full GraphData for this analysis
   paramsJson  Json?    // Analysis parameters
   error       String?
+  userId      String?  // User who created this analysis
 
   // Relations
+  user        User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
   contracts    Contract[]
   sourceFiles  SourceFile[]
   typeDefs     TypeDef[]
@@ -40,6 +42,7 @@ model Analysis {
   @@index([rootAddress])
   @@index([status])
   @@index([createdAt])
+  @@index([userId])
 }
 
 // ============================================
@@ -236,6 +239,9 @@ model User {
   smartWalletAddress String?  @map("smart_wallet_address") // Smart wallet contract address (persisted even when disabled)
   createdAt          DateTime @default(now()) @map("created_at")
   updatedAt          DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  analyses     Analysis[]
 
   @@index([address])
   @@map("users")

@@ -77,9 +77,26 @@ function computeSmartLayout(
   // When "address" is not visible but "contract" is, we're in a contracts-focused view
   const hideWallets = !visibleNodeKinds.has("address") && visibleNodeKinds.has("contract");
 
+  // Detect contract-only mode
+  const isContractOnlyMode = visibleNodeKinds.has("contract") &&
+    !visibleNodeKinds.has("sourceFile") &&
+    !visibleNodeKinds.has("typeDef") &&
+    !visibleNodeKinds.has("address");
+
+  // Collect addresses referenced by REFERENCES_ADDRESS edges when in contract-only mode
+  const referencedAddresses = new Set<string>();
+  if (isContractOnlyMode) {
+    for (const edge of graphData.edges) {
+      if (edge.kind === "REFERENCES_ADDRESS" && edge.to.startsWith("address:")) {
+        const address = edge.to.replace("address:", "");
+        referencedAddresses.add(address);
+      }
+    }
+  }
+
   // Filter nodes based on visibility settings
   const filteredNodes = graphData.nodes.filter((node) => {
-    // Handle address nodes - show deployer wallets when contracts are visible
+    // Handle address nodes - show deployer wallets and referenced addresses when contracts are visible
     if (node.kind === "address") {
       if (visibleNodeKinds.has("address")) {
         return true;
@@ -91,6 +108,10 @@ function computeSmartLayout(
         typeof node.label === "string" &&
         node.label.startsWith("Deployer Wallet")
       ) {
+        return true;
+      }
+      // Include addresses referenced by REFERENCES_ADDRESS edges in contract-only mode
+      if (isContractOnlyMode && "address" in node && referencedAddresses.has(node.address)) {
         return true;
       }
       return false;
@@ -295,12 +316,16 @@ function computeSmartLayout(
   });
 
   // Build edges with proper styling based on edge type
+  // When in "contract only" mode, always include REFERENCES_ADDRESS edges
   const flowEdges: FlowEdge[] = graphData.edges
     .filter(
-      (edge) =>
-        visibleEdgeKinds.has(edge.kind) &&
-        nodeIds.has(edge.from) &&
-        nodeIds.has(edge.to)
+      (edge) => {
+        // Always show REFERENCES_ADDRESS edges in contract-only mode
+        const shouldShow = visibleEdgeKinds.has(edge.kind) ||
+          (isContractOnlyMode && edge.kind === "REFERENCES_ADDRESS");
+
+        return shouldShow && nodeIds.has(edge.from) && nodeIds.has(edge.to);
+      }
     )
     .map((edge) => {
       const color = EDGE_COLORS[edge.kind] || "#6b7280";

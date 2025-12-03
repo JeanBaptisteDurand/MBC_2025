@@ -1,5 +1,5 @@
 import { Outlet, Link, useLocation } from "react-router-dom";
-import { Activity, History, Sun, Moon, Hexagon, User, BotMessageSquare } from "lucide-react";
+import { Activity, History, Sun, Moon, Hexagon, BotMessageSquare, User } from "lucide-react";
 import { ConnectWallet, Wallet, WalletDropdown, WalletDropdownDisconnect } from "@coinbase/onchainkit/wallet";
 import { Address, Avatar, Name, Identity } from "@coinbase/onchainkit/identity";
 import { useTheme } from "../hooks/useTheme";

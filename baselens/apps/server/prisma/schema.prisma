@@ -225,3 +225,19 @@ model RagMessage {
   @@index([chatId])
 }
 
+// ============================================
+// User - User accounts with smart wallet support
+// ============================================
+
+model User {
+  id                 String   @id @default(uuid())
+  address            String   @unique // EOA wallet address (0x...)
+  smartWalletEnabled Boolean  @default(false) @map("smart_wallet_enabled")
+  smartWalletAddress String?  @map("smart_wallet_address") // Smart wallet contract address (persisted even when disabled)
+  createdAt          DateTime @default(now()) @map("created_at")
+  updatedAt          DateTime @updatedAt @map("updated_at")
+
+  @@index([address])
+  @@map("users")
+}
+

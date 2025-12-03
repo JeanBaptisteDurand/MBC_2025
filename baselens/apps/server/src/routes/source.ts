@@ -209,7 +209,7 @@ router.get("/:analysisId/:address/type/:typeName", async (req, res) => {
  * Extract a specific type definition (contract, interface, library, abstract contract)
  * from Solidity source code.
  */
-function extractTypeDefinition(
+export function extractTypeDefinition(
   sourceCode: string,
   typeName: string,
   kind: "INTERFACE" | "LIBRARY" | "ABSTRACT_CONTRACT" | "CONTRACT_IMPL"

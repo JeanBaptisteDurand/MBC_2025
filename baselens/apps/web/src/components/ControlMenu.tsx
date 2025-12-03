@@ -44,7 +44,7 @@ export const VIEW_PRESETS: ViewPreset[] = [
     name: "Contracts Only",
     description: "Focus on contract relationships",
     nodeKinds: ["contract"],
-    edgeKinds: ["IS_PROXY_OF", "CALLS_RUNTIME", "CREATED_BY", "CREATED", "SOURCE_DECLARED_IMPL"],
+    edgeKinds: ["IS_PROXY_OF", "CALLS_RUNTIME", "CREATED_BY", "CREATED", "SOURCE_DECLARED_IMPL", "REFERENCES_ADDRESS"],
   },
   {
     name: "Source Code",

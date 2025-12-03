@@ -7,7 +7,7 @@ import { OnchainKitProvider as OCKProvider } from "@coinbase/onchainkit";
 
 // Wagmi configuration for Base Sepolia
 const wagmiConfig = createConfig({
-  chains: [baseSepolia],
+  chains: [baseSepolia], // ✅ ONLY baseSepolia
   connectors: [
     coinbaseWallet({
       appName: "BaseLens",
@@ -15,7 +15,7 @@ const wagmiConfig = createConfig({
     }),
   ],
   transports: {
-    [baseSepolia.id]: http(),
+    [baseSepolia.id]: http("https://sepolia.base.org"), // Base Sepolia RPC URL
   },
 });
 

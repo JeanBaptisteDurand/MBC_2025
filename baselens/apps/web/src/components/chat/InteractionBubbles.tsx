@@ -1,6 +1,6 @@
 import { useRef, useLayoutEffect } from 'react';
 import gsap from 'gsap';
-import Bubble from './Bubble';
+import Bubble from '../Bubble';
 import ChatInterface from './ChatInterface';
 
 interface InteractionBubblesProps {

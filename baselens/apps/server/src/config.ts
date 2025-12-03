@@ -14,6 +14,7 @@ const envSchema = z.object({
 
   // Server
   PORT: z.coerce.number().default(3001),
+  SERVER_PORT: z.coerce.number().optional(), // Alias for PORT (for x402 compatibility)
   NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
 
   // OpenAI
@@ -27,6 +28,10 @@ const envSchema = z.object({
 
   // Basescan API
   BASESCAN_API_KEY: z.string().optional(),
+
+  // x402 Payment
+  SERVER_PAY_TO_ADDRESS: z.string().optional(),
+  X402_FACILITATOR_URL: z.string().url().optional(),
 });
 
 function loadConfig() {

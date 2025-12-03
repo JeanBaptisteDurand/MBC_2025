@@ -57,6 +57,7 @@ router.post("/chat", async (req, res) => {
     return res.json({
       chatId: result.chatId,
       answer: result.answer,
+      sourcesUsed: result.sourcesUsed,
     });
   } catch (error) {
     logger.error("Failed to process chat:", error);

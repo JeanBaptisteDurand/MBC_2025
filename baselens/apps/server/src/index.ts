@@ -11,7 +11,9 @@ import { initializeQueue, closeQueue } from "./queue/index.js";
 import { startWorker, stopWorker } from "./queue/worker.js";
 import analysisRoutes from "./routes/analysis.js";
 import ragRoutes from "./routes/rag.js";
+import chatRagRoutes from "./routes/chat-rag.js";
 import sourceRoutes from "./routes/source.js";
+import userRoutes from "./routes/users.js";
 import { isPanoramixAvailable } from "./base/decompiler.js";
 
 const app = express();
@@ -35,10 +37,34 @@ app.get("/health", (_, res) => {
 app.use("/api/analyze", analysisRoutes);
 app.use("/api/analysis", analysisRoutes);
 app.use("/api/rag", ragRoutes);
+app.use("/api/chat-rag", chatRagRoutes);
 app.use("/api/source", sourceRoutes);
+app.use("/api", userRoutes); // User routes: /api/users, /api/me, /api/me/smart-wallet/*
 
 // Error handling middleware
-app.use((err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+  // Enhanced logging for x402 payment verification failures
+  if (err?.message?.includes("Failed to verify payment") || err?.message?.includes("Unauthorized")) {
+    logger.error("[x402] Payment verification failed:", {
+      message: err.message,
+      stack: err.stack,
+      path: req.path,
+      method: req.method,
+      invalidReason: err.invalidReason,
+      details: err.details,
+    });
+
+    // Return appropriate status code for payment failures
+    return res.status(401).json({
+      error: "Payment verification failed",
+      message: err.message,
+      details: process.env.NODE_ENV === "development" ? {
+        invalidReason: err.invalidReason,
+        details: err.details,
+      } : undefined,
+    });
+  }
+
   logger.error("[HTTP] Unhandled error:", err);
   res.status(500).json({
     error: "Internal server error",
@@ -49,11 +75,11 @@ app.use((err: Error, _req: express.Request, res: express.Response, _next: expres
 // Graceful shutdown
 async function shutdown() {
   logger.info("[Server] Shutting down gracefully...");
-  
+
   await stopWorker();
   await closeQueue();
   await prisma.$disconnect();
-  
+
   logger.info("[Server] ✅ Shutdown complete");
   process.exit(0);
 }
@@ -74,7 +100,7 @@ async function start() {
   logger.info(`Base RPC: ${config.BASE_RPC_URL}`);
   logger.info(`Basescan API Key: ${config.BASESCAN_API_KEY ? "✅ Configured" : "⚠️ Not configured"}`);
   logger.info("========================================");
-  
+
   try {
     // Test database connection
     logger.info("[Startup] Step 1: Testing database connection...");
@@ -82,7 +108,7 @@ async function start() {
     if (!dbConnected) {
       throw new Error("Failed to connect to database");
     }
-    
+
     // Initialize pgvector extension
     logger.info("[Startup] Step 2: Initializing pgvector extension...");
     await initializePgVector();

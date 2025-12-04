@@ -50,7 +50,7 @@ const tools: Tool[] = [
     description: 'E-Learning center for blockchain education',
     icon: BookOpen,
     color: '#fbbf24',
-    position: { x: 0, y: 80 },
+    position: { x: 0, y: 70 },
     available: false,
   },
   {

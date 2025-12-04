@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import ParticleScene from '../components/home/ParticleScene';
 import FloatingTools from '../components/home/FloatingTools';
 import HeroContent from '../components/home/HeroContent';
+import FeaturesSection from '../components/home/FeaturesSection';
 
 export default function Home() {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -88,12 +89,20 @@ export default function Home() {
     }
   }, [handleWheel]);
 
-  console.log("scrollProgress:", scrollProgress, "cameraAnimationComplete:", cameraAnimationComplete);
+  // Prevent body scroll when on Home page to avoid double scrollbars
+  useEffect(() => {
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = '';
+    };
+  }, []);
 
   return (
     <div 
       ref={containerRef}
-      className="relative w-full h-[calc(100vh-65px)] bg-surface-950 overflow-y-auto overflow-x-hidden"
+      className={`relative w-full h-[calc(100vh-65px)] bg-surface-950 overflow-x-hidden ${
+        cameraAnimationComplete ? 'overflow-y-auto' : 'overflow-hidden'
+      }`}
     >
       {/* Scrollable content wrapper */}
       <div className="relative" style={{ height: cameraAnimationComplete ? 'auto' : `calc(100vh - 65px + ${SCROLL_THRESHOLD}px)` }}>
@@ -142,14 +151,7 @@ export default function Home() {
         </div>
         
         {/* Content that appears after camera animation */}
-        {cameraAnimationComplete && (
-          <div className="relative z-50 bg-surface-950 min-h-screen pt-20">
-            <div className="max-w-4xl mx-auto px-6">
-              <h2 className="text-3xl font-bold text-white mb-6">Welcome Inside</h2>
-              <p className="text-surface-400">You've entered the BaseLens universe. More content coming soon...</p>
-            </div>
-          </div>
-        )}
+         <FeaturesSection />
       </div>
     </div>
   );

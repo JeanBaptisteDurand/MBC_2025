@@ -14,6 +14,7 @@ const envSchema = z.object({
 
   // Server
   PORT: z.coerce.number().default(3001),
+  SERVER_PORT: z.coerce.number().optional(), // Alias for PORT (for x402 compatibility)
   NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
 
   // OpenAI
@@ -27,6 +28,22 @@ const envSchema = z.object({
 
   // Basescan API
   BASESCAN_API_KEY: z.string().optional(),
+
+  // x402 Payment
+  SERVER_PAY_TO_ADDRESS: z.string().optional(),
+  X402_FACILITATOR_URL: z.string().url().optional(),
+
+  // JWT
+  JWT_SECRET: z.string().min(32, "JWT_SECRET must be at least 32 characters"),
+
+  // Agent Wallet (optional - will auto-generate if not provided)
+  AGENT_WALLET_PRIVATE_KEY: z.string().optional(),
+  USDC_ADDRESS_BASE_SEPOLIA: z.string().optional(),
+
+  // AgentKit / CDP Configuration (NOT NEEDED - only if using Coinbase-managed wallets)
+  // Current setup uses private key wallet, so CDP keys are optional/unused
+  CDP_API_KEY_NAME: z.string().optional(),
+  CDP_API_KEY_PRIVATE_KEY: z.string().optional(),
 });
 
 function loadConfig() {

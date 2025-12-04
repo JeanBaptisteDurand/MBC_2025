@@ -290,6 +290,16 @@ export interface RagChatResponse {
   chatId: string;
   answer: string;
   messages?: RagChatMessage[];
+  sourcesUsed?: RagSourceUsed[];
+}
+
+export interface RagSourceUsed {
+  kind: string;
+  refId: string;
+  contractAddress?: string;
+  nodeId?: string;
+  similarity: number;
+  contentPreview?: string;
 }
 
 // ============================================

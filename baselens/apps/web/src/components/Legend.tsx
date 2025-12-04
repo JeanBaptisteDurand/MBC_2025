@@ -67,7 +67,7 @@ export default function Legend() {
   return (
     <div
       className={cn(
-        "absolute bottom-4 left-4 z-10 transition-all duration-300 ease-out",
+        "absolute bottom-4 left-14 z-10 transition-all duration-300 ease-out",
         "bg-surface-900/95 backdrop-blur-md border border-surface-700 rounded-xl shadow-2xl",
         isExpanded ? "w-80" : "w-auto"
       )}

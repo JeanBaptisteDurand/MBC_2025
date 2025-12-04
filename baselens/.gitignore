@@ -40,3 +40,6 @@ coverage/
 *.tsbuildinfo
 .turbo/
 
+# Agent wallet data (contains sensitive private keys)
+apps/server/data/agent-wallet.key
+

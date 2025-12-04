@@ -1,13 +1,17 @@
 import { Outlet, Link, useLocation } from "react-router-dom";
-import { Activity, History, Sun, Moon, Hexagon, User, BotMessageSquare } from "lucide-react";
+import { Activity, History, Sun, Moon, Hexagon, BotMessageSquare, User, LogIn } from "lucide-react";
 import { ConnectWallet, Wallet, WalletDropdown, WalletDropdownDisconnect } from "@coinbase/onchainkit/wallet";
 import { Address, Avatar, Name, Identity } from "@coinbase/onchainkit/identity";
+import { useAccount } from "wagmi";
 import { useTheme } from "../hooks/useTheme";
+import { useAuth } from "../contexts/AuthContext";
 import { cn } from "../utils/cn";
 
 export default function Layout() {
   const { theme, toggleTheme } = useTheme();
   const location = useLocation();
+  const { address, isConnected } = useAccount();
+  const { isAuthenticated, login, isLoading: authLoading } = useAuth();
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -27,7 +31,7 @@ export default function Layout() {
 
           {/* Navigation */}
           <nav className="flex items-center gap-6">
-			<Link
+            <Link
               to="/chat"
               className={cn(
                 "flex items-center gap-2 text-sm font-medium transition-colors",
@@ -105,6 +109,23 @@ export default function Layout() {
                 <WalletDropdownDisconnect />
               </WalletDropdown>
             </Wallet>
+
+            {/* Login Button */}
+            {isConnected && address && !isAuthenticated && !authLoading && (
+              <button
+                onClick={async () => {
+                  try {
+                    await login();
+                  } catch (error) {
+                    console.error("Login failed:", error);
+                  }
+                }}
+                className="btn btn-primary btn-sm flex items-center gap-2"
+              >
+                <LogIn className="w-4 h-4" />
+                Sign In
+              </button>
+            )}
           </nav>
         </div>
       </header>

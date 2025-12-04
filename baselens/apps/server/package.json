@@ -16,19 +16,27 @@
   },
   "dependencies": {
     "@baselens/core": "workspace:*",
+    "@coinbase/x402": "^0.7.3",
     "@prisma/client": "^6.1.0",
     "bullmq": "^5.30.1",
     "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
     "express": "^4.21.2",
     "ioredis": "^5.4.1",
+    "jsonwebtoken": "^9.0.2",
     "openai": "^4.77.0",
+    "@coinbase/agentkit": "^0.1.0",
+    "@coinbase/agentkit-model-context-protocol": "^0.1.0",
+    "@modelcontextprotocol/sdk": "^0.5.0",
     "uuid": "^11.0.3",
     "viem": "^2.21.54",
+    "x402-express": "^0.7.1",
     "zod": "^3.24.1"
   },
   "devDependencies": {
     "@types/cors": "^2.8.17",
     "@types/express": "^5.0.0",
+    "@types/jsonwebtoken": "^9.0.7",
     "@types/node": "^22.10.2",
     "@types/uuid": "^10.0.0",
     "prisma": "^6.1.0",
@@ -36,4 +44,3 @@
     "typescript": "^5.7.2"
   }
 }
-

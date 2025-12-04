@@ -5,6 +5,7 @@
 import { prisma, storeEmbedding } from "../db/prismaClient.js";
 import { logger } from "../logger.js";
 import { chatCompletion, createEmbedding, truncateToTokens } from "./openai.js";
+import { extractTypeDefinition } from "../routes/source.js";
 import type { AnalysisSummary } from "@baselens/core";
 
 // ============================================
@@ -385,16 +386,20 @@ export async function indexAnalysisForRag(analysisId: string): Promise<void> {
 
   // Fetch all relevant content
   logger.info(`[AI] Fetching content to index...`);
-  const [contracts, summary] = await Promise.all([
+  const [contracts, summary, sourceFiles] = await Promise.all([
     prisma.contract.findMany({ where: { analysisId } }),
     prisma.globalAnalysisSummary.findUnique({ where: { analysisId } }),
+    prisma.sourceFile.findMany({
+      where: { analysisId },
+      include: { typeDefs: true },
+    }),
   ]);
 
   // Filter out EOA (wallets) - only index contracts with actual code
   const contractsToIndex = contracts.filter(c => c.kindOnChain !== "EOA");
   const skippedEOA = contracts.length - contractsToIndex.length;
 
-  logger.info(`[AI] Found ${contracts.length} total, ${contractsToIndex.length} contracts to index (skipped ${skippedEOA} EOA wallets), summary: ${summary ? "YES" : "NO"}`);
+  logger.info(`[AI] Found ${contracts.length} total, ${contractsToIndex.length} contracts to index (skipped ${skippedEOA} EOA wallets), summary: ${summary ? "YES" : "NO"}, source files: ${sourceFiles.length}`);
 
   const documents: { kind: string; refId: string; content: string }[] = [];
 
@@ -429,6 +434,56 @@ export async function indexAnalysisForRag(analysisId: string): Promise<void> {
     });
 
     logger.debug(`[AI] Added contract ${contract.address.slice(0, 10)}... to index`);
+  }
+
+  // Add type definitions (interfaces, contracts, libraries, abstract contracts)
+  // Extract type definitions from source files
+  for (const sourceFile of sourceFiles) {
+    for (const typeDef of sourceFile.typeDefs) {
+      // Extract the type definition code from the source file
+      const extractedCode = extractTypeDefinition(
+        sourceFile.content,
+        typeDef.name,
+        typeDef.kind as "INTERFACE" | "LIBRARY" | "ABSTRACT_CONTRACT" | "CONTRACT_IMPL"
+      );
+
+      const parts: string[] = [];
+      parts.push(`Type Definition: ${typeDef.name}`);
+      parts.push(`Kind: ${typeDef.kind}`);
+      parts.push(`Contract Address: ${sourceFile.contractAddress}`);
+      parts.push(`Source File: ${sourceFile.path}`);
+      parts.push(`Instanciable: ${typeDef.instanciable}`);
+      if (typeDef.isRootContractType) {
+        parts.push(`Root Contract Type: Yes`);
+      }
+
+      if (extractedCode) {
+        // Truncate extracted code for embedding
+        const truncatedCode = truncateToTokens(extractedCode, 2000);
+        parts.push(`\nSource Code:\n${truncatedCode}`);
+      } else {
+        // Fallback: include a snippet from the source file around the type name
+        const typeNameIndex = sourceFile.content.indexOf(typeDef.name);
+        if (typeNameIndex !== -1) {
+          const snippet = sourceFile.content.slice(
+            Math.max(0, typeNameIndex - 200),
+            Math.min(sourceFile.content.length, typeNameIndex + 2000)
+          );
+          parts.push(`\nSource Code (snippet):\n${snippet}`);
+        }
+      }
+
+      // Build refId: typedef:contractAddress:typeName
+      const refId = `typedef:${sourceFile.contractAddress}:${typeDef.name}`;
+
+      documents.push({
+        kind: "type",
+        refId,
+        content: parts.join("\n"),
+      });
+
+      logger.debug(`[AI] Added type definition ${typeDef.name} from ${sourceFile.contractAddress.slice(0, 10)}... to index`);
+    }
   }
 
   logger.info(`[AI] Prepared ${documents.length} documents for indexing`);

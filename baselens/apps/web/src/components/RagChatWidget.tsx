@@ -3,9 +3,13 @@ import { MessageSquare, X, Send, Loader, Bot, User } from "lucide-react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { getRagChat, sendRagMessage } from "../api/endpoints";
+import { getRagChat } from "../api/endpoints";
+import { useX402Fetch } from "../hooks/useX402Fetch";
+import { useSmartWallet } from "../providers/SmartWalletProvider";
 import { cn } from "../utils/cn";
 import type { RagGraphContext, Node, Edge } from "@baselens/core";
+
+const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:3001";
 
 interface RagChatWidgetProps {
   analysisId: string;
@@ -20,8 +24,12 @@ export default function RagChatWidget({ analysisId, graphData }: RagChatWidgetPr
   const [isOpen, setIsOpen] = useState(false);
   const [input, setInput] = useState("");
   const [chatId, setChatId] = useState<string | null>(null);
+  const [pendingMessage, setPendingMessage] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const queryClient = useQueryClient();
+  const { isSmartWalletActive } = useSmartWallet();
+  const fetchWithPayment = useX402Fetch(isSmartWalletActive);
 
   // Fetch existing chat
   const { data: chatData } = useQuery({
@@ -78,30 +86,56 @@ export default function RagChatWidget({ analysisId, graphData }: RagChatWidgetPr
     };
   };
 
-  // Send message mutation
+  // Send message mutation with x402 payment
   const sendMutation = useMutation({
-    mutationFn: (question: string) =>
-      sendRagMessage({
-        analysisId,
-        chatId: chatId || undefined,
-        question,
-        graphContext: buildGraphContext(),
-      }),
+    mutationFn: async (question: string) => {
+      const graphContext = buildGraphContext();
+
+      // Use x402 fetch to automatically handle payment
+      const response = await fetchWithPayment(`${API_BASE_URL}/api/chat-rag`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          analysisId,
+          chatId: chatId || undefined,
+          question,
+          graphContext,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
+      }
+
+      return response.json();
+    },
     onSuccess: (data) => {
       setChatId(data.chatId);
+      setPendingMessage(null); // Clear pending message once response is received
+      setError(null); // Clear any previous errors
       queryClient.invalidateQueries({ queryKey: ["ragChat", analysisId] });
+    },
+    onError: (error: Error) => {
+      console.error("[RagChatWidget] Error sending message:", error);
+      setPendingMessage(null); // Clear pending message on error
+      setError(error.message || "Failed to send message. Please try again.");
     },
   });
 
-  // Scroll to bottom when messages change
+  // Scroll to bottom when messages change or pending message is added
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [chatData?.messages, sendMutation.isPending]);
+  }, [chatData?.messages, sendMutation.isPending, pendingMessage]);
 
   const handleSend = () => {
     if (!input.trim() || sendMutation.isPending) return;
-    sendMutation.mutate(input.trim());
+    const question = input.trim();
+    setPendingMessage(question); // Show message immediately
     setInput("");
+    sendMutation.mutate(question);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -192,8 +226,23 @@ export default function RagChatWidget({ analysisId, graphData }: RagChatWidgetPr
               </div>
             ))}
 
+            {/* Show pending user message immediately */}
+            {pendingMessage && (
+              <div className="flex gap-3 justify-end">
+                <div
+                  className="max-w-[80%] rounded-xl px-4 py-2 bg-primary-900/50 text-surface-100"
+                >
+                  <p className="text-sm">{pendingMessage}</p>
+                </div>
+                <div className="w-8 h-8 rounded-lg bg-primary-900/50 flex items-center justify-center flex-shrink-0">
+                  <User className="w-4 h-4 text-primary-400" />
+                </div>
+              </div>
+            )}
+
+            {/* Show loading indicator where response will appear */}
             {sendMutation.isPending && (
-              <div className="flex gap-3">
+              <div className="flex gap-3 justify-start">
                 <div className="w-8 h-8 rounded-lg bg-accent-900/50 flex items-center justify-center flex-shrink-0">
                   <Bot className="w-4 h-4 text-accent-400" />
                 </div>
@@ -208,11 +257,19 @@ export default function RagChatWidget({ analysisId, graphData }: RagChatWidgetPr
 
           {/* Input */}
           <div className="p-4 border-t border-surface-700">
+            {error && (
+              <div className="mb-2 p-2 rounded-lg bg-red-900/20 border border-red-700/50">
+                <p className="text-xs text-red-400">{error}</p>
+              </div>
+            )}
             <div className="flex gap-2">
               <input
                 type="text"
                 value={input}
-                onChange={(e) => setInput(e.target.value)}
+                onChange={(e) => {
+                  setInput(e.target.value);
+                  setError(null); // Clear error when user types
+                }}
                 onKeyDown={handleKeyDown}
                 placeholder="Ask a question..."
                 className="input flex-1 text-sm"

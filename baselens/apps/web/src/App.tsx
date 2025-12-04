@@ -3,9 +3,9 @@ import Layout from "./components/Layout";
 import Home from "./routes/Home";
 import GraphView from "./routes/GraphView";
 import History from "./routes/History";
-import Profile from "./routes/Profile";
 import Chat from "./routes/Chat";
 import Analyze from "./routes/Analyze";
+import Profile from "./routes/Profile";
 
 function App() {
   return (

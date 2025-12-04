@@ -35,7 +35,11 @@
     "tailwind-merge": "^2.6.0",
     "three": "0.160.0",
     "viem": "^2.21.0",
-    "wagmi": "^2.14.0"
+    "wagmi": "^2.14.0",
+    "x402-fetch": "^0.7.3",
+    "@zerodev/sdk": "^5.5.6",
+    "@zerodev/ecdsa-validator": "^5.4.9",
+    "permissionless": "^0.1.0"
   },
   "devDependencies": {
     "@types/react": "^18.3.17",

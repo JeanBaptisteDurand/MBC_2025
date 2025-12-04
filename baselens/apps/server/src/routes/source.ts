@@ -6,6 +6,7 @@ import { Router } from "express";
 import type { SourceCodeResponse } from "@baselens/core";
 import { prisma } from "../db/prismaClient.js";
 import { logger } from "../logger.js";
+import { authenticateToken, type AuthRequest } from "../middleware/auth.js";
 
 const router = Router();
 
@@ -13,10 +14,28 @@ const router = Router();
 // GET /api/source/:analysisId/:address - Get source code for a contract
 // ============================================
 
-router.get("/:analysisId/:address", async (req, res) => {
+router.get("/:analysisId/:address", authenticateToken, async (req: AuthRequest, res) => {
   try {
+    if (!req.userId) {
+      return res.status(401).json({ error: "Authentication required" });
+    }
+
     const { analysisId, address } = req.params;
     const normalizedAddress = address.toLowerCase();
+
+    // Verify user owns this analysis
+    const analysis = await prisma.analysis.findUnique({
+      where: { id: analysisId },
+      select: { userId: true },
+    });
+
+    if (!analysis) {
+      return res.status(404).json({ error: "Analysis not found" });
+    }
+
+    if (analysis.userId !== req.userId) {
+      return res.status(403).json({ error: "Access denied" });
+    }
 
     // Get contract
     const contract = await prisma.contract.findFirst({
@@ -68,10 +87,28 @@ router.get("/:analysisId/:address", async (req, res) => {
 // GET /api/source/:analysisId/:address/abi - Get ABI for a contract
 // ============================================
 
-router.get("/:analysisId/:address/abi", async (req, res) => {
+router.get("/:analysisId/:address/abi", authenticateToken, async (req: AuthRequest, res) => {
   try {
+    if (!req.userId) {
+      return res.status(401).json({ error: "Authentication required" });
+    }
+
     const { analysisId, address } = req.params;
     const normalizedAddress = address.toLowerCase();
+
+    // Verify user owns this analysis
+    const analysis = await prisma.analysis.findUnique({
+      where: { id: analysisId },
+      select: { userId: true },
+    });
+
+    if (!analysis) {
+      return res.status(404).json({ error: "Analysis not found" });
+    }
+
+    if (analysis.userId !== req.userId) {
+      return res.status(403).json({ error: "Access denied" });
+    }
 
     const contract = await prisma.contract.findFirst({
       where: {
@@ -104,10 +141,28 @@ router.get("/:analysisId/:address/abi", async (req, res) => {
 // GET /api/source/:analysisId/:address/types - Get type definitions
 // ============================================
 
-router.get("/:analysisId/:address/types", async (req, res) => {
+router.get("/:analysisId/:address/types", authenticateToken, async (req: AuthRequest, res) => {
   try {
+    if (!req.userId) {
+      return res.status(401).json({ error: "Authentication required" });
+    }
+
     const { analysisId, address } = req.params;
     const normalizedAddress = address.toLowerCase();
+
+    // Verify user owns this analysis
+    const analysis = await prisma.analysis.findUnique({
+      where: { id: analysisId },
+      select: { userId: true },
+    });
+
+    if (!analysis) {
+      return res.status(404).json({ error: "Analysis not found" });
+    }
+
+    if (analysis.userId !== req.userId) {
+      return res.status(403).json({ error: "Access denied" });
+    }
 
     // Get source files for this contract
     const sourceFiles = await prisma.sourceFile.findMany({
@@ -143,10 +198,28 @@ router.get("/:analysisId/:address/types", async (req, res) => {
 // GET /api/source/:analysisId/:address/type/:typeName - Get extracted type definition
 // ============================================
 
-router.get("/:analysisId/:address/type/:typeName", async (req, res) => {
+router.get("/:analysisId/:address/type/:typeName", authenticateToken, async (req: AuthRequest, res) => {
   try {
+    if (!req.userId) {
+      return res.status(401).json({ error: "Authentication required" });
+    }
+
     const { analysisId, address, typeName } = req.params;
     const normalizedAddress = address.toLowerCase();
+
+    // Verify user owns this analysis
+    const analysis = await prisma.analysis.findUnique({
+      where: { id: analysisId },
+      select: { userId: true },
+    });
+
+    if (!analysis) {
+      return res.status(404).json({ error: "Analysis not found" });
+    }
+
+    if (analysis.userId !== req.userId) {
+      return res.status(403).json({ error: "Access denied" });
+    }
 
     // Get type definition from database
     const sourceFiles = await prisma.sourceFile.findMany({
@@ -209,7 +282,7 @@ router.get("/:analysisId/:address/type/:typeName", async (req, res) => {
  * Extract a specific type definition (contract, interface, library, abstract contract)
  * from Solidity source code.
  */
-function extractTypeDefinition(
+export function extractTypeDefinition(
   sourceCode: string,
   typeName: string,
   kind: "INTERFACE" | "LIBRARY" | "ABSTRACT_CONTRACT" | "CONTRACT_IMPL"

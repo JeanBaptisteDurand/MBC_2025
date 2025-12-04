@@ -166,3 +166,42 @@ export async function getRagChatHistory(
   return api.get(`/api/rag/chat/${chatId}/history`);
 }
 
+// ============================================
+// User Profile Endpoints
+// ============================================
+
+export interface UserProfile {
+  id: string;
+  address: string;
+  smart_wallet_enabled: boolean;
+  smart_wallet_address: string | null;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export async function getUserProfile(address?: string): Promise<UserProfile> {
+  // Pass address as query param if provided
+  const params = address ? { address } : undefined;
+  return api.get<UserProfile>("/api/me", params);
+}
+
+export async function enableSmartWallet(
+  smartWalletAddress: string
+): Promise<UserProfile> {
+  return api.post<UserProfile>("/api/me/smart-wallet/enable", {
+    smartWalletAddress,
+  });
+}
+
+export async function disableSmartWallet(): Promise<UserProfile> {
+  return api.post<UserProfile>("/api/me/smart-wallet/disable", {});
+}
+
+export async function createOrUpdateUser(
+  address: string
+): Promise<UserProfile> {
+  return api.post<UserProfile>("/api/users", {
+    address,
+  });
+}
+

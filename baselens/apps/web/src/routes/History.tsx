@@ -1,15 +1,21 @@
 import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { ExternalLink, Clock, CheckCircle, XCircle, Loader } from "lucide-react";
+import { useAccount } from "wagmi";
+import { ExternalLink, Clock, CheckCircle, XCircle, Loader, LogIn } from "lucide-react";
 import { getAnalysisHistory } from "../api/endpoints";
+import { useAuth } from "../contexts/AuthContext";
 import { shortenAddress, getBasescanAddressUrl } from "../utils/explorers";
 import { cn } from "../utils/cn";
 import type { AnalysisHistoryItem, Network } from "@baselens/core";
 
 export default function History() {
+  const { address, isConnected } = useAccount();
+  const { isAuthenticated, login, isLoading: authLoading } = useAuth();
+
   const { data: history, isLoading, error } = useQuery({
     queryKey: ["analysisHistory"],
     queryFn: getAnalysisHistory,
+    enabled: isAuthenticated, // Only fetch when authenticated
     refetchInterval: 10000, // Refresh every 10 seconds
   });
 
@@ -23,7 +29,32 @@ export default function History() {
           View all previous contract analyses
         </p>
 
-        {isLoading ? (
+        {!isConnected ? (
+          <div className="card p-12 text-center">
+            <XCircle className="w-12 h-12 text-surface-500 mx-auto mb-4" />
+            <p className="text-surface-400 mb-4">Connect your wallet to view history</p>
+          </div>
+        ) : !isAuthenticated && !authLoading ? (
+          <div className="card p-12 text-center">
+            <LogIn className="w-12 h-12 text-primary-400 mx-auto mb-4" />
+            <h2 className="text-xl font-semibold mb-2">Sign In Required</h2>
+            <p className="text-surface-400 mb-6">
+              Please sign in with your wallet to view your analysis history
+            </p>
+            <button
+              onClick={async () => {
+                try {
+                  await login();
+                } catch (error) {
+                  console.error("Login failed:", error);
+                }
+              }}
+              className="btn btn-primary"
+            >
+              Sign In
+            </button>
+          </div>
+        ) : isLoading || authLoading ? (
           <div className="card p-12 flex items-center justify-center">
             <Loader className="w-8 h-8 animate-spin text-primary-500" />
           </div>
@@ -31,6 +62,20 @@ export default function History() {
           <div className="card p-12 text-center">
             <XCircle className="w-12 h-12 text-red-500 mx-auto mb-4" />
             <p className="text-surface-400">Failed to load history</p>
+            {error instanceof Error && error.message.includes("401") && (
+              <button
+                onClick={async () => {
+                  try {
+                    await login();
+                  } catch (err) {
+                    console.error("Login failed:", err);
+                  }
+                }}
+                className="btn btn-primary mt-4"
+              >
+                Sign In
+              </button>
+            )}
           </div>
         ) : history && history.length > 0 ? (
           <div className="space-y-4">

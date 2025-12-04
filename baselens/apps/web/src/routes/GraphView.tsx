@@ -54,32 +54,194 @@ const EDGE_COLORS: Record<string, string> = {
   SOURCE_DECLARED_IMPL: "#fb923c",
 };
 
-// Layout configuration - tuned for visual clarity
-const LAYOUT_CONFIG = {
-  CONTRACT_HORIZONTAL_SPACING: 450,
-  CONTRACT_VERTICAL_SPACING: 350,
-  SOURCE_FILE_OFFSET_X: 280,
-  SOURCE_FILE_OFFSET_Y: 60,
-  TYPE_DEF_OFFSET_X: 60,
-  TYPE_DEF_OFFSET_Y: 90,
-  ADDRESS_OFFSET_X: -320,
-  ADDRESS_OFFSET_Y: -50,
-  PROXY_IMPL_OFFSET_X: 350,
-  PROXY_IMPL_OFFSET_Y: 50,
+// Circular layout configuration
+const CIRCULAR_LAYOUT_CONFIG = {
+  // Base radius for contract circle (will be scaled based on number of contracts)
+  BASE_CONTRACT_RADIUS: 800,
+  // Minimum radius for contract circle
+  MIN_CONTRACT_RADIUS: 6000,
+  // Maximum radius for contract circle
+  MAX_CONTRACT_RADIUS: 24000,
+  // Inner orbit radius for source files and deployer wallets (relative to contract position)
+  INNER_ORBIT_RADIUS: 720,
+  // Outer orbit radius for type definitions (relative to contract position)
+  OUTER_ORBIT_RADIUS: 1280,
+  // Outer circle radius for EOA wallets (absolute from center)
+  EOA_ORBIT_RADIUS: 3200,
+  // Spacing between nodes on the same orbit
+  MIN_NODE_SPACING: 400,
 };
 
-// Intelligent layout algorithm
+// Helper function to calculate position on a circle
+function getPositionOnCircle(
+  centerX: number,
+  centerY: number,
+  radius: number,
+  angle: number
+): { x: number; y: number } {
+  return {
+    x: centerX + radius * Math.cos(angle),
+    y: centerY + radius * Math.sin(angle),
+  };
+}
+
+// Calculate optimal radius for contract circle based on number of contracts
+function calculateContractCircleRadius(numContracts: number): number {
+  if (numContracts === 0) return CIRCULAR_LAYOUT_CONFIG.MIN_CONTRACT_RADIUS;
+  if (numContracts === 1) return CIRCULAR_LAYOUT_CONFIG.MIN_CONTRACT_RADIUS;
+
+  // Calculate circumference needed: numContracts * MIN_NODE_SPACING
+  const circumference = numContracts * CIRCULAR_LAYOUT_CONFIG.MIN_NODE_SPACING;
+  // Calculate radius from circumference: r = C / (2 * π)
+  const calculatedRadius = circumference / (2 * Math.PI);
+
+  // Clamp between min and max
+  return Math.max(
+    CIRCULAR_LAYOUT_CONFIG.MIN_CONTRACT_RADIUS,
+    Math.min(calculatedRadius, CIRCULAR_LAYOUT_CONFIG.MAX_CONTRACT_RADIUS)
+  );
+}
+
+// Circular layout algorithm
 function computeSmartLayout(
   graphData: GraphData,
   visibleNodeKinds: Set<string>,
-  visibleEdgeKinds: Set<string>
+  visibleEdgeKinds: Set<string>,
+  hiddenContractIds: Set<string> = new Set()
 ): { nodes: FlowNode[]; edges: FlowEdge[] } {
   // When "address" is not visible but "contract" is, we're in a contracts-focused view
   const hideWallets = !visibleNodeKinds.has("address") && visibleNodeKinds.has("contract");
 
+  // Detect contract-only mode
+  const isContractOnlyMode = visibleNodeKinds.has("contract") &&
+    !visibleNodeKinds.has("sourceFile") &&
+    !visibleNodeKinds.has("typeDef") &&
+    !visibleNodeKinds.has("address");
+
+  // Collect addresses referenced by REFERENCES_ADDRESS edges when in contract-only mode
+  const referencedAddresses = new Set<string>();
+  if (isContractOnlyMode) {
+    for (const edge of graphData.edges) {
+      if (edge.kind === "REFERENCES_ADDRESS" && edge.to.startsWith("address:")) {
+        const address = edge.to.replace("address:", "");
+        referencedAddresses.add(address);
+      }
+    }
+  }
+
+  // Build adjacency maps
+  const contractToSource = new Map<string, string[]>();
+  const sourceToTypes = new Map<string, string[]>();
+  const contractToCreator = new Map<string, string>();
+  const contractReferences = new Map<string, string[]>();
+  const contractToTypes = new Map<string, string[]>(); // Types defined by contract (via source)
+  const proxyToImpl = new Map<string, string>();
+  const implToProxy = new Map<string, string[]>();
+  const contractToEoaWallets = new Map<string, string[]>(); // EOA wallets related to contract
+
+  for (const edge of graphData.edges) {
+    const from = edge.from;
+    const to = edge.to;
+
+    if (edge.kind === "IS_PROXY_OF") {
+      proxyToImpl.set(from, to);
+      const proxies = implToProxy.get(to) || [];
+      proxies.push(from);
+      implToProxy.set(to, proxies);
+    } else if (edge.kind === "HAS_SOURCE_FILE") {
+      const sources = contractToSource.get(from) || [];
+      sources.push(to);
+      contractToSource.set(from, sources);
+    } else if (edge.kind === "DECLARES_TYPE") {
+      const types = sourceToTypes.get(from) || [];
+      types.push(to);
+      sourceToTypes.set(from, types);
+    } else if (edge.kind === "CREATED_BY") {
+      contractToCreator.set(from, to);
+    } else if (edge.kind === "REFERENCES_ADDRESS") {
+      const refs = contractReferences.get(from) || [];
+      refs.push(to);
+      contractReferences.set(from, refs);
+      // Check if this is an EOA wallet
+      if (to.startsWith("address:")) {
+        const eoaWallets = contractToEoaWallets.get(from) || [];
+        eoaWallets.push(to);
+        contractToEoaWallets.set(from, eoaWallets);
+      }
+    }
+  }
+
+  // Build contractToTypes from sourceToTypes (after all edges are processed)
+  for (const [sourceId, types] of sourceToTypes.entries()) {
+    const contractId = Array.from(contractToSource.entries()).find(([_, sources]) =>
+      sources.includes(sourceId)
+    )?.[0];
+    if (contractId) {
+      const contractTypes = contractToTypes.get(contractId) || [];
+      types.forEach(typeId => {
+        if (!contractTypes.includes(typeId)) {
+          contractTypes.push(typeId);
+        }
+      });
+      contractToTypes.set(contractId, contractTypes);
+    }
+  }
+
+  // Find all children nodes of hidden contracts (recursively)
+  const hiddenNodeIds = new Set<string>();
+  const findChildren = (contractId: string) => {
+    hiddenNodeIds.add(contractId);
+
+    // Add source files
+    const sources = contractToSource.get(contractId) || [];
+    sources.forEach((sourceId) => {
+      hiddenNodeIds.add(sourceId);
+      // Add type definitions from source files
+      const types = sourceToTypes.get(sourceId) || [];
+      types.forEach((typeId) => hiddenNodeIds.add(typeId));
+    });
+
+    // Add creator address
+    const creatorId = contractToCreator.get(contractId);
+    if (creatorId) {
+      hiddenNodeIds.add(creatorId);
+    }
+
+    // Add referenced addresses
+    const refs = contractReferences.get(contractId) || [];
+    refs.forEach((refId) => hiddenNodeIds.add(refId));
+
+    // Add proxy if this is an implementation
+    const proxies = implToProxy.get(contractId) || [];
+    proxies.forEach((proxyId) => {
+      if (!hiddenContractIds.has(proxyId)) {
+        // Only hide proxy if it's not explicitly hidden (to avoid circular hiding)
+      }
+    });
+
+    // Add implementation if this is a proxy
+    const implId = proxyToImpl.get(contractId);
+    if (implId && hiddenContractIds.has(contractId)) {
+      // If proxy is hidden, also hide its implementation
+      if (!hiddenContractIds.has(implId)) {
+        findChildren(implId);
+      }
+    }
+  };
+
+  // Build set of all hidden nodes (contracts + their children)
+  hiddenContractIds.forEach((contractId) => {
+    findChildren(contractId);
+  });
+
   // Filter nodes based on visibility settings
   const filteredNodes = graphData.nodes.filter((node) => {
-    // Handle address nodes - show deployer wallets when contracts are visible
+    // Skip if this node is hidden (contract or its child)
+    if (hiddenNodeIds.has(node.id)) {
+      return false;
+    }
+
+    // Handle address nodes - show deployer wallets and referenced addresses when contracts are visible
     if (node.kind === "address") {
       if (visibleNodeKinds.has("address")) {
         return true;
@@ -91,6 +253,10 @@ function computeSmartLayout(
         typeof node.label === "string" &&
         node.label.startsWith("Deployer Wallet")
       ) {
+        return true;
+      }
+      // Include addresses referenced by REFERENCES_ADDRESS edges in contract-only mode
+      if (isContractOnlyMode && "address" in node && referencedAddresses.has(node.address)) {
         return true;
       }
       return false;
@@ -114,173 +280,251 @@ function computeSmartLayout(
   });
   const nodeIds = new Set(filteredNodes.map((n) => n.id));
 
-  // Build adjacency maps for relationships
-  const proxyToImpl = new Map<string, string>();
-  const contractToSource = new Map<string, string[]>();
-  const sourceToTypes = new Map<string, string[]>();
-  const contractToCreator = new Map<string, string>();
-  const creatorToContracts = new Map<string, string[]>();
-  const contractReferences = new Map<string, string[]>();
+  // Separate contracts from EOA contracts (wallets)
+  const allContracts = filteredNodes.filter((n) => n.kind === "contract") as (Node & { kind: "contract" })[];
+  const contracts = allContracts.filter((c) => (c as ContractNodeData).kindOnChain !== "EOA");
+  const eoaContracts = allContracts.filter((c) => (c as ContractNodeData).kindOnChain === "EOA");
 
+  // Build map of EOA contracts to related contracts (via REFERENCES_ADDRESS edges)
+  const eoaToContract = new Map<string, string>();
   for (const edge of graphData.edges) {
-    const from = edge.from;
-    const to = edge.to;
-
-    if (edge.kind === "IS_PROXY_OF") {
-      proxyToImpl.set(from, to);
-    } else if (edge.kind === "HAS_SOURCE_FILE") {
-      const sources = contractToSource.get(from) || [];
-      sources.push(to);
-      contractToSource.set(from, sources);
-    } else if (edge.kind === "DECLARES_TYPE") {
-      const types = sourceToTypes.get(from) || [];
-      types.push(to);
-      sourceToTypes.set(from, types);
-    } else if (edge.kind === "CREATED_BY") {
-      contractToCreator.set(from, to);
-      const contracts = creatorToContracts.get(to) || [];
-      contracts.push(from);
-      creatorToContracts.set(to, contracts);
-    } else if (edge.kind === "REFERENCES_ADDRESS") {
-      const refs = contractReferences.get(from) || [];
-      refs.push(to);
-      contractReferences.set(from, refs);
+    if (edge.kind === "REFERENCES_ADDRESS" && edge.from.startsWith("contract:")) {
+      const contractId = edge.from;
+      const addressId = edge.to;
+      // Find EOA contract with matching address
+      const eoaContract = eoaContracts.find((c) => {
+        if ("address" in c) {
+          return addressId.includes((c as any).address);
+        }
+        return false;
+      });
+      if (eoaContract && nodeIds.has(contractId)) {
+        eoaToContract.set(eoaContract.id, contractId);
+      }
     }
   }
-
-  // Find root contract
-  const contracts = filteredNodes.filter((n) => n.kind === "contract") as (Node & { kind: "contract" })[];
-  const rootContract = contracts.find((c) => (c as ContractNodeData).isRoot);
 
   // Position tracking
   const nodePositions = new Map<string, { x: number; y: number }>();
   const positionedNodes = new Set<string>();
 
-  // Helper to position a contract and its related nodes
-  function positionContractCluster(
-    contractId: string,
-    baseX: number,
-    baseY: number,
-    level: number = 0
-  ) {
-    if (positionedNodes.has(contractId)) return;
-    positionedNodes.add(contractId);
+  // Contract-only mode: Simple grid layout with 5 contracts per row
+  if (isContractOnlyMode) {
+    const CONTRACT_SPACING_X = 350;
+    const CONTRACT_SPACING_Y = 300;
+    const DEPLOYER_OFFSET_X = 180;
+    const DEPLOYER_OFFSET_Y = -80;
+    const CONTRACTS_PER_ROW = 5;
 
-    // Position the contract
-    nodePositions.set(contractId, { x: baseX, y: baseY });
+    // Position contracts in a grid (5 per row)
+    contracts.forEach((contract, idx) => {
+      if (hiddenNodeIds.has(contract.id)) return;
 
-    // Position source files to the right
-    const sourceFiles = contractToSource.get(contractId) || [];
-    sourceFiles.forEach((sourceId, idx) => {
-      if (!nodeIds.has(sourceId)) return;
-      const sourceX = baseX + LAYOUT_CONFIG.SOURCE_FILE_OFFSET_X;
-      const sourceY = baseY + idx * LAYOUT_CONFIG.SOURCE_FILE_OFFSET_Y;
-      nodePositions.set(sourceId, { x: sourceX, y: sourceY });
-      positionedNodes.add(sourceId);
+      const row = Math.floor(idx / CONTRACTS_PER_ROW);
+      const col = idx % CONTRACTS_PER_ROW;
+      const x = col * CONTRACT_SPACING_X;
+      const y = row * CONTRACT_SPACING_Y;
 
-      // Position type definitions below source files
-      const types = sourceToTypes.get(sourceId) || [];
-      types.forEach((typeId, typeIdx) => {
-        if (!nodeIds.has(typeId)) return;
-        const typeX = sourceX + LAYOUT_CONFIG.TYPE_DEF_OFFSET_X + (typeIdx % 3) * 150;
-        const typeY = sourceY + LAYOUT_CONFIG.TYPE_DEF_OFFSET_Y + Math.floor(typeIdx / 3) * 100;
-        nodePositions.set(typeId, { x: typeX, y: typeY });
-        positionedNodes.add(typeId);
-      });
-    });
+      nodePositions.set(contract.id, { x, y });
+      positionedNodes.add(contract.id);
 
-    // Position implementation if this is a proxy (to the right)
-    const implId = proxyToImpl.get(contractId);
-    if (implId && !positionedNodes.has(implId) && nodeIds.has(implId)) {
-      positionContractCluster(
-        implId,
-        baseX + LAYOUT_CONFIG.PROXY_IMPL_OFFSET_X,
-        baseY + LAYOUT_CONFIG.PROXY_IMPL_OFFSET_Y,
-        level + 1
-      );
-    }
+      // Position deployer wallet near the contract
+      const creatorId = contractToCreator.get(contract.id);
+      if (creatorId && nodeIds.has(creatorId) && !positionedNodes.has(creatorId)) {
+        const creatorNode = filteredNodes.find((n: any) => n.id === creatorId);
+        const isDeployer = creatorNode && creatorNode.kind === "address" &&
+          "label" in creatorNode &&
+          typeof creatorNode.label === "string" &&
+          (creatorNode.label.includes("Factory") || creatorNode.label.includes("Deployer"));
 
-    // Position creator address to the left
-    const creatorId = contractToCreator.get(contractId);
-    if (creatorId && !positionedNodes.has(creatorId) && nodeIds.has(creatorId)) {
-      nodePositions.set(creatorId, {
-        x: baseX + LAYOUT_CONFIG.ADDRESS_OFFSET_X,
-        y: baseY + LAYOUT_CONFIG.ADDRESS_OFFSET_Y,
-      });
-      positionedNodes.add(creatorId);
-    }
-
-    // Position referenced addresses below
-    const refs = contractReferences.get(contractId) || [];
-    refs.forEach((refId, idx) => {
-      if (!positionedNodes.has(refId) && nodeIds.has(refId)) {
-        nodePositions.set(refId, {
-          x: baseX + (idx % 3) * 180 - 180,
-          y: baseY + LAYOUT_CONFIG.CONTRACT_VERTICAL_SPACING + Math.floor(idx / 3) * 100,
-        });
-        positionedNodes.add(refId);
-      }
-    });
-  }
-
-  // Start layout from root contract
-  let currentY = 0;
-
-  if (rootContract) {
-    positionContractCluster(rootContract.id, 0, currentY);
-    currentY += LAYOUT_CONFIG.CONTRACT_VERTICAL_SPACING;
-  }
-
-  // Position remaining contracts in rows
-  const remainingContracts = contracts.filter((c) => !positionedNodes.has(c.id));
-
-  // Group by: proxies, factories, implementations, simple contracts
-  const proxies = remainingContracts.filter((c) => (c as ContractNodeData).kindOnChain === "PROXY");
-  const factories = remainingContracts.filter((c) => (c as ContractNodeData).isFactory);
-  const impls = remainingContracts.filter((c) => (c as ContractNodeData).kindOnChain === "IMPLEMENTATION");
-  const others = remainingContracts.filter(
-    (c) =>
-      (c as ContractNodeData).kindOnChain !== "PROXY" &&
-      !(c as ContractNodeData).isFactory &&
-      (c as ContractNodeData).kindOnChain !== "IMPLEMENTATION"
-  );
-
-  // Layout each group
-  const groups = [proxies, factories, impls, others];
-
-  for (const group of groups) {
-    let col = 0;
-    for (const contract of group) {
-      if (!positionedNodes.has(contract.id)) {
-        const x = col * LAYOUT_CONFIG.CONTRACT_HORIZONTAL_SPACING;
-        positionContractCluster(contract.id, x, currentY);
-        col++;
-        if (col >= 4) {
-          col = 0;
-          currentY += LAYOUT_CONFIG.CONTRACT_VERTICAL_SPACING;
+        if (isDeployer) {
+          nodePositions.set(creatorId, {
+            x: x + DEPLOYER_OFFSET_X,
+            y: y + DEPLOYER_OFFSET_Y,
+          });
+          positionedNodes.add(creatorId);
         }
       }
-    }
-    if (col > 0) {
-      currentY += LAYOUT_CONFIG.CONTRACT_VERTICAL_SPACING;
-    }
-  }
+    });
 
-  // Position any remaining unpositioned nodes (addresses, etc.)
-  const allFilteredIds = new Set(filteredNodes.map((n) => n.id));
-  let remainingCol = 0;
-  for (const node of filteredNodes) {
-    if (!positionedNodes.has(node.id)) {
-      nodePositions.set(node.id, {
-        x: remainingCol * 200,
-        y: currentY,
-      });
-      remainingCol++;
-      if (remainingCol >= 6) {
-        remainingCol = 0;
-        currentY += 150;
+    // Position any remaining unpositioned nodes
+    filteredNodes.forEach((node: any) => {
+      if (!positionedNodes.has(node.id) && nodeIds.has(node.id)) {
+        nodePositions.set(node.id, { x: 0, y: 0 });
+        positionedNodes.add(node.id);
       }
+    });
+  } else {
+    // Circular layout for normal mode
+    const contractCircleRadius = contracts.length > 0
+      ? calculateContractCircleRadius(contracts.length)
+      : CIRCULAR_LAYOUT_CONFIG.MIN_CONTRACT_RADIUS;
+    const centerX = 0;
+    const centerY = 0;
+
+    // Step 1: Position contracts in a circle
+    if (contracts.length > 0) {
+      contracts.forEach((contract, idx) => {
+        if (hiddenNodeIds.has(contract.id)) return;
+
+        const angle = (2 * Math.PI * idx) / contracts.length - Math.PI / 2; // Start from top
+        const pos = getPositionOnCircle(centerX, centerY, contractCircleRadius, angle);
+        nodePositions.set(contract.id, pos);
+        positionedNodes.add(contract.id);
+      });
     }
+
+    // Step 2: Position source files and deployer wallets in inner orbit around contracts
+    contracts.forEach((contract) => {
+      if (!nodeIds.has(contract.id) || hiddenNodeIds.has(contract.id)) return;
+
+      const contractPos = nodePositions.get(contract.id);
+      if (!contractPos) return;
+
+      // Calculate angle from center to contract
+      const contractAngle = Math.atan2(contractPos.y - centerY, contractPos.x - centerX);
+
+      // Position source files in inner orbit
+      const sourceFiles = contractToSource.get(contract.id) || [];
+      const visibleSourceFiles = sourceFiles.filter(id => nodeIds.has(id) && !positionedNodes.has(id));
+
+      if (visibleSourceFiles.length > 0) {
+        visibleSourceFiles.forEach((sourceId, idx) => {
+          // Distribute source files evenly around the contract
+          const sourceAngle = contractAngle + (2 * Math.PI * idx) / visibleSourceFiles.length - Math.PI / 2;
+          const sourcePos = getPositionOnCircle(
+            contractPos.x,
+            contractPos.y,
+            CIRCULAR_LAYOUT_CONFIG.INNER_ORBIT_RADIUS,
+            sourceAngle
+          );
+          nodePositions.set(sourceId, sourcePos);
+          positionedNodes.add(sourceId);
+        });
+      }
+
+      // Position deployer wallet in inner orbit
+      const creatorId = contractToCreator.get(contract.id);
+      if (creatorId && nodeIds.has(creatorId) && !positionedNodes.has(creatorId)) {
+        // Check if it's a deployer (not EOA)
+        const creatorNode = filteredNodes.find(n => n.id === creatorId);
+        const isDeployer = creatorNode && creatorNode.kind === "address" &&
+          "label" in creatorNode &&
+          typeof creatorNode.label === "string" &&
+          (creatorNode.label.includes("Factory") || creatorNode.label.includes("Deployer"));
+
+        if (isDeployer) {
+          const deployerAngle = contractAngle + Math.PI / 4; // Offset angle
+          const deployerPos = getPositionOnCircle(
+            contractPos.x,
+            contractPos.y,
+            CIRCULAR_LAYOUT_CONFIG.INNER_ORBIT_RADIUS,
+            deployerAngle
+          );
+          nodePositions.set(creatorId, deployerPos);
+          positionedNodes.add(creatorId);
+        }
+      }
+    });
+
+    // Step 3: Position type definitions (Library, Abstract, Interface, Deployable) in outer orbit around contracts
+    contracts.forEach((contract) => {
+      if (!nodeIds.has(contract.id) || hiddenNodeIds.has(contract.id)) return;
+
+      const contractPos = nodePositions.get(contract.id);
+      if (!contractPos) return;
+
+      const contractAngle = Math.atan2(contractPos.y - centerY, contractPos.x - centerX);
+
+      // Get all types for this contract
+      const types = contractToTypes.get(contract.id) || [];
+
+      // Position types in outer orbit
+      const visibleTypes = types.filter(id => nodeIds.has(id) && !positionedNodes.has(id));
+
+      if (visibleTypes.length > 0) {
+        // Group visible types by kind for clustering
+        const visibleTypesByKind = new Map<string, string[]>();
+        visibleTypes.forEach((typeId) => {
+          const typeNode = filteredNodes.find(n => n.id === typeId);
+          if (typeNode && typeNode.kind === "typeDef" && "typeKind" in typeNode) {
+            const kind = (typeNode as any).typeKind || "OTHER";
+            const kindTypes = visibleTypesByKind.get(kind) || [];
+            kindTypes.push(typeId);
+            visibleTypesByKind.set(kind, kindTypes);
+          } else {
+            // Fallback for types without kind
+            const kindTypes = visibleTypesByKind.get("OTHER") || [];
+            kindTypes.push(typeId);
+            visibleTypesByKind.set("OTHER", kindTypes);
+          }
+        });
+
+        // Position types evenly around the contract
+        visibleTypes.forEach((typeId, idx) => {
+          if (positionedNodes.has(typeId)) return;
+
+          // Distribute types around the contract
+          const typeAngle = contractAngle + (2 * Math.PI * idx) / visibleTypes.length - Math.PI / 2;
+          const typePos = getPositionOnCircle(
+            contractPos.x,
+            contractPos.y,
+            CIRCULAR_LAYOUT_CONFIG.OUTER_ORBIT_RADIUS,
+            typeAngle
+          );
+          nodePositions.set(typeId, typePos);
+          positionedNodes.add(typeId);
+        });
+      }
+    });
+
+    // Step 4: Position EOA wallets in outer circle
+    eoaContracts.forEach((eoaContract, idx) => {
+      if (hiddenNodeIds.has(eoaContract.id) || positionedNodes.has(eoaContract.id)) return;
+
+      // Find related contract for this EOA
+      const relatedContractId = eoaToContract.get(eoaContract.id);
+
+      let angle: number;
+      if (relatedContractId && nodeIds.has(relatedContractId)) {
+        // Position near the related contract but on outer circle
+        const relatedContractPos = nodePositions.get(relatedContractId);
+        if (relatedContractPos) {
+          const relatedAngle = Math.atan2(relatedContractPos.y - centerY, relatedContractPos.x - centerX);
+          // Offset slightly from the contract angle
+          angle = relatedAngle + (Math.PI / 6) * (idx % 2 === 0 ? 1 : -1);
+        } else {
+          angle = (2 * Math.PI * idx) / Math.max(eoaContracts.length, 1) - Math.PI / 2;
+        }
+      } else {
+        // Distribute evenly on outer circle
+        angle = (2 * Math.PI * idx) / Math.max(eoaContracts.length, 1) - Math.PI / 2;
+      }
+
+      const eoaPos = getPositionOnCircle(centerX, centerY, CIRCULAR_LAYOUT_CONFIG.EOA_ORBIT_RADIUS, angle);
+      nodePositions.set(eoaContract.id, eoaPos);
+      positionedNodes.add(eoaContract.id);
+    });
+
+    // Step 5: Position any remaining address nodes (non-deployer, non-EOA)
+    const remainingAddresses = filteredNodes.filter(
+      (n: any) => n.kind === "address" && !positionedNodes.has(n.id) && nodeIds.has(n.id)
+    );
+    remainingAddresses.forEach((address: any, idx: number) => {
+      const angle = (2 * Math.PI * idx) / Math.max(remainingAddresses.length, 1) - Math.PI / 2;
+      const pos = getPositionOnCircle(centerX, centerY, CIRCULAR_LAYOUT_CONFIG.EOA_ORBIT_RADIUS, angle);
+      nodePositions.set(address.id, pos);
+      positionedNodes.add(address.id);
+    });
+
+    // Step 6: Position any remaining unpositioned nodes
+    filteredNodes.forEach((node: any) => {
+      if (!positionedNodes.has(node.id) && nodeIds.has(node.id)) {
+        // Place at a default position
+        nodePositions.set(node.id, { x: centerX + 1000, y: centerY + 1000 });
+        positionedNodes.add(node.id);
+      }
+    });
   }
 
   // Build final nodes array
@@ -295,12 +539,16 @@ function computeSmartLayout(
   });
 
   // Build edges with proper styling based on edge type
+  // When in "contract only" mode, always include REFERENCES_ADDRESS edges
   const flowEdges: FlowEdge[] = graphData.edges
     .filter(
-      (edge) =>
-        visibleEdgeKinds.has(edge.kind) &&
-        nodeIds.has(edge.from) &&
-        nodeIds.has(edge.to)
+      (edge) => {
+        // Always show REFERENCES_ADDRESS edges in contract-only mode
+        const shouldShow = visibleEdgeKinds.has(edge.kind) ||
+          (isContractOnlyMode && edge.kind === "REFERENCES_ADDRESS");
+
+        return shouldShow && nodeIds.has(edge.from) && nodeIds.has(edge.to);
+      }
     )
     .map((edge) => {
       const color = EDGE_COLORS[edge.kind] || "#6b7280";
@@ -388,6 +636,7 @@ export default function GraphView() {
       "SOURCE_DECLARED_IMPL",
     ])
   );
+  const [hiddenContractIds, setHiddenContractIds] = useState<Set<string>>(new Set());
   const [isAiDrawerOpen, setIsAiDrawerOpen] = useState(false);
   const [sourceCodeModal, setSourceCodeModal] = useState<{
     isOpen: boolean;
@@ -421,8 +670,8 @@ export default function GraphView() {
   // Compute layout when data or filters change
   const computedLayout = useMemo(() => {
     if (!graphData) return { nodes: [], edges: [] };
-    return computeSmartLayout(graphData, visibleNodeKinds, visibleEdgeKinds);
-  }, [graphData, visibleNodeKinds, visibleEdgeKinds, layoutKey]);
+    return computeSmartLayout(graphData, visibleNodeKinds, visibleEdgeKinds, hiddenContractIds);
+  }, [graphData, visibleNodeKinds, visibleEdgeKinds, hiddenContractIds, layoutKey]);
 
   // Update flow when computed layout changes
   useEffect(() => {
@@ -455,6 +704,18 @@ export default function GraphView() {
         next.delete(kind);
       } else {
         next.add(kind);
+      }
+      return next;
+    });
+  };
+
+  const toggleContract = (contractId: string) => {
+    setHiddenContractIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(contractId)) {
+        next.delete(contractId);
+      } else {
+        next.add(contractId);
       }
       return next;
     });
@@ -536,6 +797,9 @@ export default function GraphView() {
         onToggleNodeKind={toggleNodeKind}
         onToggleEdgeKind={toggleEdgeKind}
         onApply={applyLayout}
+        graphData={graphData}
+        hiddenContractIds={hiddenContractIds}
+        onToggleContract={toggleContract}
       />
 
       {/* Graph Stats Badge */}

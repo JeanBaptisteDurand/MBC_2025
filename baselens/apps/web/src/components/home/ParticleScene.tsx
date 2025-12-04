@@ -2,6 +2,7 @@ import { Suspense, useRef } from 'react';
 import { Canvas, useThree, useFrame } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
 import ParticleRing from './ParticleRing';
+import CenterOrb from './CenterOrb';
 
 interface CameraControllerProps {
   scrollProgress: number;
@@ -133,6 +134,9 @@ export default function ParticleScene({ scrollProgress = 0 }: ParticleSceneProps
             color="#38bdf8" 
             size={0.02}
           />
+          
+          {/* Center orb that morphs into logo */}
+          <CenterOrb scrollProgress={scrollProgress} />
           
           {/* Subtle orbit controls - disabled for now to keep focus on content */}
           <OrbitControls 

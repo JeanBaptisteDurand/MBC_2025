@@ -67,9 +67,10 @@ const tools: Tool[] = [
 interface FloatingToolProps {
   tool: Tool;
   index: number;
+  animationPaused?: boolean;
 }
 
-function FloatingTool({ tool, index }: FloatingToolProps) {
+function FloatingTool({ tool, index, animationPaused }: FloatingToolProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const floatAnimation = useRef<gsap.core.Tween | null>(null);
@@ -117,7 +118,66 @@ function FloatingTool({ tool, index }: FloatingToolProps) {
     };
   }, [index, tool.position.y]);
 
+  // Pause/resume animation and auto-expand/collapse based on animationPaused prop
+  useLayoutEffect(() => {
+    if (floatAnimation.current) {
+      if (animationPaused) {
+        gsap.to(floatAnimation.current, {
+          timeScale: 0,
+          duration: 0.3,
+          ease: 'power2.out',
+        });
+      } else {
+        gsap.to(floatAnimation.current, {
+          timeScale: 1,
+          duration: 0.3,
+          ease: 'power2.in',
+        });
+      }
+    }
+    
+    // Auto-expand when animation is paused, collapse when resumed
+    if (containerRef.current && contentRef.current) {
+      expandTimeline.current?.kill();
+      expandTimeline.current = gsap.timeline();
+      
+      if (animationPaused) {
+        // Expand with staggered delay based on index
+        expandTimeline.current
+          .to(containerRef.current, {
+            width: EXPANDED_WIDTH,
+            height: EXPANDED_HEIGHT,
+            duration: 0.35,
+            delay: index * 0.08,
+            ease: 'power3.out',
+          })
+          .to(contentRef.current, {
+            opacity: 1,
+            duration: 0.2,
+            ease: 'power2.out',
+          }, '-=0.15');
+      } else {
+        // Collapse
+        expandTimeline.current
+          .to(contentRef.current, {
+            opacity: 0,
+            duration: 0.1,
+            ease: 'power2.in',
+          })
+          .to(containerRef.current, {
+            width: COLLAPSED_SIZE,
+            height: COLLAPSED_SIZE,
+            duration: 0.25,
+            ease: 'power3.inOut',
+          }, '-=0.05');
+      }
+    }
+  }, [animationPaused, index]);
+
   const handleMouseEnter = () => {
+    // Skip if already forcefully expanded
+    if (animationPaused) return;
+    
     // Slow down and pause the floating animation
     if (floatAnimation.current) {
       gsap.to(floatAnimation.current, {
@@ -150,8 +210,11 @@ function FloatingTool({ tool, index }: FloatingToolProps) {
   };
 
   const handleMouseLeave = () => {
-    // Resume the floating animation
-    if (floatAnimation.current) {
+    // Skip if forcefully expanded - should stay open
+    if (animationPaused) return;
+    
+    // Resume the floating animation only if not globally paused
+    if (floatAnimation.current && !animationPaused) {
       gsap.to(floatAnimation.current, {
         timeScale: 1,
         duration: 0.3,
@@ -251,13 +314,17 @@ function FloatingTool({ tool, index }: FloatingToolProps) {
   );
 }
 
-export default function FloatingTools() {
+interface FloatingToolsProps {
+  animationPaused?: boolean;
+}
+
+export default function FloatingTools({ animationPaused }: FloatingToolsProps) {
   return (
     <div className="absolute inset-0 pointer-events-none">
       <div className="relative w-full h-full">
         {tools.map((tool, index) => (
           <div key={tool.id} className="pointer-events-auto">
-            <FloatingTool tool={tool} index={index} />
+            <FloatingTool tool={tool} index={index} animationPaused={animationPaused} />
           </div>
         ))}
       </div>

@@ -1,20 +1,39 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Search, Zap, Shield, GitBranch } from "lucide-react";
+import { Search, Zap, Shield, GitBranch, LogIn } from "lucide-react";
+import { useAccount } from "wagmi";
 import AnalyzeForm from "../components/AnalyzeForm";
 import ProgressBar from "../components/ProgressBar";
 import { useToast } from "../components/ui/Toast";
+import { useAuth } from "../contexts/AuthContext";
 import { startAnalysis, getAnalysisStatus } from "../api/endpoints";
 import type { Network } from "@baselens/core";
 
 export default function Home() {
   const navigate = useNavigate();
   const { toast } = useToast();
+  const { address, isConnected } = useAccount();
+  const { isAuthenticated, login, isLoading: authLoading } = useAuth();
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [progress, setProgress] = useState(0);
   const [statusMessage, setStatusMessage] = useState("");
 
   const handleAnalyze = async (address: string, network: Network) => {
+    // Check authentication
+    if (!isAuthenticated) {
+      toast({
+        title: "Authentication required",
+        description: "Please sign in to start an analysis",
+        variant: "error",
+      });
+      try {
+        await login();
+      } catch (error) {
+        console.error("Login failed:", error);
+      }
+      return;
+    }
+
     setIsAnalyzing(true);
     setProgress(0);
     setStatusMessage("Starting analysis...");
@@ -106,6 +125,38 @@ export default function Home() {
                     message={statusMessage}
                   />
                 </div>
+              ) : !isConnected ? (
+                <div className="card p-8 text-center">
+                  <p className="text-surface-400 mb-4">Connect your wallet to get started</p>
+                </div>
+              ) : !isAuthenticated && !authLoading ? (
+                <div className="card p-8 text-center">
+                  <LogIn className="w-12 h-12 text-primary-400 mx-auto mb-4" />
+                  <h2 className="text-xl font-semibold mb-2">Sign In Required</h2>
+                  <p className="text-surface-400 mb-6">
+                    Please sign in with your wallet to start analyzing contracts
+                  </p>
+                  <button
+                    onClick={async () => {
+                      try {
+                        await login();
+                      } catch (error) {
+                        toast({
+                          title: "Login failed",
+                          description: error instanceof Error ? error.message : "Please try again",
+                          variant: "error",
+                        });
+                      }
+                    }}
+                    className="btn btn-primary"
+                  >
+                    Sign In
+                  </button>
+                </div>
+              ) : authLoading ? (
+                <div className="card p-8 text-center">
+                  <p className="text-surface-400">Loading...</p>
+                </div>
               ) : (
                 <AnalyzeForm onAnalyze={handleAnalyze} />
               )}
@@ -179,4 +230,3 @@ function getStatusMessage(status: string, progress: number): string {
       return "Processing...";
   }
 }
-

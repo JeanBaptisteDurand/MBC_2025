@@ -11,27 +11,27 @@ export default function HeroContent() {
       // Title animation
       gsap.fromTo(
         titleRef.current,
-        { opacity: 0, y: 30, scale: 0.95 },
+        { opacity: 0, y: 20, scale: 0.95 },
         { 
           opacity: 1, 
           y: 0, 
           scale: 1,
-          duration: 1,
+          duration: 0.8,
           ease: 'power3.out',
-          delay: 0.3
+          delay: 0.2
         }
       );
 
       // Subtitle animation
       gsap.fromTo(
         subtitleRef.current,
-        { opacity: 0, y: 20 },
+        { opacity: 0, y: 15 },
         { 
           opacity: 1, 
           y: 0, 
-          duration: 0.8,
+          duration: 0.6,
           ease: 'power2.out',
-          delay: 0.6
+          delay: 0.4
         }
       );
     });
@@ -41,10 +41,10 @@ export default function HeroContent() {
 
   return (
     <div className="relative z-20 text-center pointer-events-none select-none">
-      {/* Main title */}
+      {/* Main title - scaled down */}
       <h1
         ref={titleRef}
-        className="text-6xl md:text-8xl font-display font-bold mb-6 opacity-0"
+        className="text-4xl md:text-5xl lg:text-6xl font-display font-bold mb-3 opacity-0"
       >
         <span className="text-white">Base</span>
         <span className="gradient-text">Lens</span>

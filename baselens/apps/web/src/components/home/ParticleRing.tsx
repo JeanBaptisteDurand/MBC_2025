@@ -32,9 +32,13 @@ export default function ParticleRing({
       const radiusVariation = radius + (Math.random() - 0.5) * 1.5;
       const heightVariation = (Math.random() - 0.5) * 0.8;
       
-      positions[i * 3] = Math.cos(angle) * radiusVariation;
-      positions[i * 3 + 1] = heightVariation;
-      positions[i * 3 + 2] = Math.sin(angle) * radiusVariation;
+      const x = Math.cos(angle) * radiusVariation;
+      const y = heightVariation;
+      const z = Math.sin(angle) * radiusVariation;
+      
+      positions[i * 3] = x;
+      positions[i * 3 + 1] = y;
+      positions[i * 3 + 2] = z;
       
       // Random speed for each particle
       speeds[i] = 0.2 + Math.random() * 0.3;

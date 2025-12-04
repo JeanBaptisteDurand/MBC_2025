@@ -41,7 +41,7 @@ const tools: Tool[] = [
     description: 'Developer APIs to integrate BaseLens into your applications',
     icon: Code,
     color: '#34d399',
-    position: { x: -320, y: 60 },
+    position: { x: -320, y: 20 },
     available: false,
   },
   {
@@ -50,7 +50,7 @@ const tools: Tool[] = [
     description: 'E-Learning center for blockchain education',
     icon: BookOpen,
     color: '#fbbf24',
-    position: { x: 0, y: 120 },
+    position: { x: 0, y: 80 },
     available: false,
   },
   {
@@ -59,7 +59,7 @@ const tools: Tool[] = [
     description: 'Automatic portfolio management powered by AI',
     icon: Wallet,
     color: '#f472b6',
-    position: { x: 320, y: 60 },
+    position: { x: 320, y: 20 },
     available: false,
   },
 ];
@@ -104,7 +104,7 @@ function FloatingTool({ tool, index }: FloatingToolProps) {
 
     // Continuous floating animation
     floatAnimation.current = gsap.to(containerRef.current, {
-      y: tool.position.y + Math.sin(index) * 10,
+      y: tool.position.y + Math.sin(index) * 4,
       duration: 2 + index * 0.3,
       repeat: -1,
       yoyo: true,

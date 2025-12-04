@@ -30,12 +30,12 @@ COPY pnpm-lock.yaml ./
 COPY packages/core/package.json ./packages/core/
 COPY apps/server/package.json ./apps/server/
 
-# Install dependencies
-RUN pnpm install --frozen-lockfile || pnpm install
-
-# Copy source code
+# Copy source code first (needed for proper workspace dependency resolution)
 COPY packages/core ./packages/core
 COPY apps/server ./apps/server
+
+# Install dependencies (with source present for proper workspace linking)
+RUN pnpm install --frozen-lockfile || pnpm install
 
 # Build core package
 WORKDIR /app/packages/core

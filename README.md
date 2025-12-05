@@ -98,5 +98,5 @@ On Base, reading and understanding complex smart-contract systems (proxies, fact
 ### 🔗 Deployed Contracts
 | Address | Description |
 |--------|-------------|
-| `0x3A7F370D0C105Afc23800253504656ae99857bde` | Payment contract used for analysis / x402 access |
+| `0x3A7F370D0C105Afc23800253504656ae99857bde` | Payment contract used for analysis |
 | `0x1705ea88ef9f10165d5268b315f23823ee0a20f3` | Agent execution simulation contract (Base Sepolia) |

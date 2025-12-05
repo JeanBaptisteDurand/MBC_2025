@@ -64,7 +64,7 @@ A built-in **On-Chain Agent** can receive natural-language instructions (for exa
 cd baselens
 pnpm install
 
-# Start4
+# Start
 docker-compose up -d --build
 ```
 

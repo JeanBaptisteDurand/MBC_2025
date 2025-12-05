@@ -1,233 +1,158 @@
-import { useState } from "react";
-import { useNavigate } from "react-router-dom";
-import { Search, Zap, Shield, GitBranch, LogIn } from "lucide-react";
-import { useAccount } from "wagmi";
-import AnalyzeForm from "../components/AnalyzeForm";
-import ProgressBar from "../components/ProgressBar";
-import { useToast } from "../components/ui/Toast";
-import { useAuth } from "../contexts/AuthContext";
-import { startAnalysis, getAnalysisStatus } from "../api/endpoints";
-import type { Network } from "@baselens/core";
+import { useState, useEffect, useRef, useCallback } from 'react';
+import ParticleScene from '../components/home/ParticleScene';
+import FloatingTools from '../components/home/FloatingTools';
+import HeroContent from '../components/home/HeroContent';
+import FeaturesSection from '../components/home/FeaturesSection';
 
 export default function Home() {
-  const navigate = useNavigate();
-  const { toast } = useToast();
-  const { address, isConnected } = useAccount();
-  const { isAuthenticated, login, isLoading: authLoading } = useAuth();
-  const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [progress, setProgress] = useState(0);
-  const [statusMessage, setStatusMessage] = useState("");
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [scrollProgress, setScrollProgress] = useState(0);
+  const [cameraAnimationComplete, setCameraAnimationComplete] = useState(false);
+  const [scrollLocked, setScrollLocked] = useState(false);
+  
+  // Track the "virtual" scroll position (rate-limited)
+  const virtualScrollY = useRef(0);
 
-  const handleAnalyze = async (address: string, network: Network) => {
-    // Check authentication
-    if (!isAuthenticated) {
-      toast({
-        title: "Authentication required",
-        description: "Please sign in to start an analysis",
-        variant: "error",
-      });
-      try {
-        await login();
-      } catch (error) {
-        console.error("Login failed:", error);
+  // Scroll threshold where camera animation completes (in pixels)
+  const SCROLL_THRESHOLD = 800;
+  // Maximum scroll delta per event (limits scroll speed)
+  const MAX_SCROLL_DELTA = 50;
+
+  const handleWheel = useCallback((e: WheelEvent) => {
+    if (!containerRef.current) return;
+    
+    // Block all scrolling when locked
+    if (scrollLocked) {
+      e.preventDefault();
+      return;
+    }
+    
+    const isScrollingUp = e.deltaY < 0;
+    const container = containerRef.current;
+    
+    // If animation is complete and we're at the top of the page content, 
+    // capture scroll up to reverse the animation
+    if (cameraAnimationComplete && isScrollingUp && container.scrollTop === 0) {
+      e.preventDefault();
+      
+      // Clamp the scroll delta to limit speed
+      const clampedDelta = Math.max(-MAX_SCROLL_DELTA, Math.min(MAX_SCROLL_DELTA, e.deltaY));
+      
+      // Update virtual scroll position
+      virtualScrollY.current = Math.max(0, virtualScrollY.current + clampedDelta);
+      
+      // Calculate progress from virtual scroll
+      const progress = virtualScrollY.current / SCROLL_THRESHOLD;
+      
+      setScrollProgress(progress);
+      
+      // Reset animation complete state when scrolling back
+      if (progress < 1) {
+        setCameraAnimationComplete(false);
       }
       return;
     }
-
-    setIsAnalyzing(true);
-    setProgress(0);
-    setStatusMessage("Starting analysis...");
-
-    try {
-      // Start analysis
-      const { jobId } = await startAnalysis({
-        address,
-        network,
-        maxDepth: 2,
-      });
-
-      // Poll for status
-      const pollInterval = setInterval(async () => {
-        try {
-          const status = await getAnalysisStatus(jobId);
-
-          setProgress(status.progress);
-          setStatusMessage(getStatusMessage(status.status, status.progress));
-
-          if (status.status === "done" && status.analysisId) {
-            clearInterval(pollInterval);
-            setIsAnalyzing(false);
-            toast({
-              title: "Analysis complete",
-              description: "Redirecting to graph view...",
-              variant: "success",
-            });
-            navigate(`/graph/${status.analysisId}`);
-          } else if (status.status === "error") {
-            clearInterval(pollInterval);
-            setIsAnalyzing(false);
-            toast({
-              title: "Analysis failed",
-              description: status.error || "An error occurred",
-              variant: "error",
-            });
-          }
-        } catch (error) {
-          clearInterval(pollInterval);
-          setIsAnalyzing(false);
-          toast({
-            title: "Error",
-            description: "Failed to check analysis status",
-            variant: "error",
-          });
-        }
-      }, 1000);
-
-      // Cleanup on unmount
-      return () => clearInterval(pollInterval);
-    } catch (error) {
-      setIsAnalyzing(false);
-      toast({
-        title: "Failed to start analysis",
-        description: error instanceof Error ? error.message : "Unknown error",
-        variant: "error",
-      });
+    
+    // During animation phase (not yet complete)
+    if (!cameraAnimationComplete) {
+      e.preventDefault();
+      
+      // Clamp the scroll delta to limit speed
+      const clampedDelta = Math.max(-MAX_SCROLL_DELTA, Math.min(MAX_SCROLL_DELTA, e.deltaY));
+      
+      // Update virtual scroll position
+      virtualScrollY.current = Math.max(0, Math.min(SCROLL_THRESHOLD, virtualScrollY.current + clampedDelta));
+      
+      // Calculate progress from virtual scroll
+      const progress = virtualScrollY.current / SCROLL_THRESHOLD;
+      
+      setScrollProgress(progress);
+      
+      // When animation completes, lock scrolling for 1 second
+      if (progress >= 1) {
+        setScrollLocked(true);
+        setCameraAnimationComplete(true);
+        setTimeout(() => setScrollLocked(false), 1000);
+      }
     }
-  };
+    // Otherwise, allow normal page scrolling (when cameraAnimationComplete && scrolling down or not at top)
+  }, [cameraAnimationComplete, scrollLocked]);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (container) {
+      // Reset scroll position on mount
+      container.scrollTop = 0;
+      // Use wheel event with passive: false to allow preventDefault
+      container.addEventListener('wheel', handleWheel, { passive: false });
+      return () => container.removeEventListener('wheel', handleWheel);
+    }
+  }, [handleWheel]);
+
+  // Prevent body scroll when on Home page to avoid double scrollbars
+  useEffect(() => {
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = '';
+    };
+  }, []);
 
   return (
-    <div className="min-h-[calc(100vh-8rem)]">
-      {/* Hero Section */}
-      <section className="relative py-20 overflow-hidden">
-        {/* Background effects */}
-        <div className="absolute inset-0 bg-gradient-to-b from-primary-950/50 via-transparent to-transparent" />
-        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[800px] h-[800px] bg-primary-500/10 rounded-full blur-3xl" />
-        <div className="absolute top-1/3 left-1/4 w-[400px] h-[400px] bg-accent-500/10 rounded-full blur-3xl" />
-
-        <div className="container mx-auto px-4 relative z-10">
-          <div className="max-w-3xl mx-auto text-center">
-            <h1 className="text-5xl md:text-6xl font-display font-bold mb-6">
-              <span className="gradient-text">Analyze</span> Smart Contracts
-              <br />
-              on <span className="text-primary-400">Base</span>
-            </h1>
-            <p className="text-xl text-surface-400 mb-12">
-              Explore contract relationships, proxy patterns, and source code.
-              AI-powered insights for EVM smart contracts on Base L2.
-            </p>
-
-            {/* Analyze Form */}
-            <div className="max-w-xl mx-auto">
-              {isAnalyzing ? (
-                <div className="card p-8 animate-fade-in">
-                  <ProgressBar
-                    progress={progress}
-                    message={statusMessage}
-                  />
-                </div>
-              ) : !isConnected ? (
-                <div className="card p-8 text-center">
-                  <p className="text-surface-400 mb-4">Connect your wallet to get started</p>
-                </div>
-              ) : !isAuthenticated && !authLoading ? (
-                <div className="card p-8 text-center">
-                  <LogIn className="w-12 h-12 text-primary-400 mx-auto mb-4" />
-                  <h2 className="text-xl font-semibold mb-2">Sign In Required</h2>
-                  <p className="text-surface-400 mb-6">
-                    Please sign in with your wallet to start analyzing contracts
-                  </p>
-                  <button
-                    onClick={async () => {
-                      try {
-                        await login();
-                      } catch (error) {
-                        toast({
-                          title: "Login failed",
-                          description: error instanceof Error ? error.message : "Please try again",
-                          variant: "error",
-                        });
-                      }
-                    }}
-                    className="btn btn-primary"
-                  >
-                    Sign In
-                  </button>
-                </div>
-              ) : authLoading ? (
-                <div className="card p-8 text-center">
-                  <p className="text-surface-400">Loading...</p>
-                </div>
-              ) : (
-                <AnalyzeForm onAnalyze={handleAnalyze} />
-              )}
+    <div 
+      ref={containerRef}
+      className={`relative w-full h-[calc(100vh-65px)] bg-surface-950 overflow-x-hidden ${
+        cameraAnimationComplete ? 'overflow-y-auto' : 'overflow-hidden'
+      }`}
+    >
+      {/* Scrollable content wrapper */}
+      <div className="relative" style={{ height: cameraAnimationComplete ? 'auto' : `calc(100vh - 65px + ${SCROLL_THRESHOLD}px)` }}>
+        
+        {/* Fixed viewport for the intro animation */}
+        <div className={`${cameraAnimationComplete ? 'relative' : 'sticky top-0'} h-[calc(100vh-65px)] w-full`}>
+          
+          {/* Hero Section - Top centered */}
+          <div 
+            className="absolute top-8 left-0 right-0 z-30 flex justify-center transition-opacity duration-300"
+          >
+            <HeroContent />
+          </div>
+          
+          {/* 3D Particle Background - Centered in remaining space */}
+          <div className="absolute inset-0">
+            <ParticleScene scrollProgress={scrollProgress} />
+          </div>
+          
+          {/* Gradient overlays for depth */}
+          <div className="absolute inset-0 bg-gradient-to-t from-surface-950 via-transparent to-surface-950/50 pointer-events-none z-10" />
+          <div className="absolute inset-0 bg-gradient-radial from-transparent via-transparent to-surface-950/80 pointer-events-none z-10" />
+          
+          {/* Floating tool icons - positioned around particles */}
+          <div className="absolute inset-0 top-32 z-20">
+            <FloatingTools animationPaused={cameraAnimationComplete} />
+          </div>
+          
+          {/* Subtle vignette effect */}
+          <div className="absolute inset-0 pointer-events-none z-40"
+            style={{
+              background: 'radial-gradient(ellipse at center, transparent 0%, transparent 50%, rgba(0,0,0,0.4) 100%)'
+            }}
+          />
+          
+          {/* Scroll indicator */}
+          <div 
+            className="absolute bottom-8 left-1/2 -translate-x-1/2 z-50 flex flex-col items-center gap-2 transition-opacity duration-300"
+            style={{ opacity: cameraAnimationComplete ? 1 : (1 - scrollProgress * 2) }}
+          >
+            <span className="text-surface-400 text-sm">Scroll to explore</span>
+            <div className="w-6 h-10 border-2 border-surface-400 rounded-full flex justify-center pt-2">
+              <div className="w-1.5 h-1.5 bg-surface-400 rounded-full animate-bounce" />
             </div>
           </div>
         </div>
-      </section>
-
-      {/* Features Section */}
-      <section className="py-20 border-t border-surface-800">
-        <div className="container mx-auto px-4">
-          <div className="grid md:grid-cols-3 gap-8">
-            <FeatureCard
-              icon={<GitBranch className="w-8 h-8" />}
-              title="Contract Graph"
-              description="Visualize proxy patterns, inheritance, and runtime relationships in an interactive graph."
-            />
-            <FeatureCard
-              icon={<Search className="w-8 h-8" />}
-              title="Source Analysis"
-              description="View verified source code or AI-decompiled bytecode with syntax highlighting."
-            />
-            <FeatureCard
-              icon={<Shield className="w-8 h-8" />}
-              title="AI Insights"
-              description="Get security notes, contract explanations, and ask questions about the code."
-            />
-          </div>
-        </div>
-      </section>
-    </div>
-  );
-}
-
-function FeatureCard({
-  icon,
-  title,
-  description,
-}: {
-  icon: React.ReactNode;
-  title: string;
-  description: string;
-}) {
-  return (
-    <div className="card p-6 group hover:border-primary-700/50 transition-colors">
-      <div className="w-14 h-14 rounded-xl bg-primary-900/50 flex items-center justify-center text-primary-400 mb-4 group-hover:bg-primary-900 transition-colors">
-        {icon}
+        
+        {/* Content that appears after camera animation */}
+         <FeaturesSection />
       </div>
-      <h3 className="text-xl font-semibold mb-2">{title}</h3>
-      <p className="text-surface-400">{description}</p>
     </div>
   );
 }
-
-function getStatusMessage(status: string, progress: number): string {
-  switch (status) {
-    case "queued":
-      return "Waiting in queue...";
-    case "running":
-      if (progress < 20) return "Starting analysis...";
-      if (progress < 40) return "Analyzing on-chain data...";
-      if (progress < 60) return "Fetching source code...";
-      if (progress < 80) return "Building contract graph...";
-      if (progress < 95) return "Generating AI insights...";
-      return "Finalizing...";
-    case "done":
-      return "Analysis complete!";
-    case "error":
-      return "Analysis failed";
-    default:
-      return "Processing...";
-  }
-}
-

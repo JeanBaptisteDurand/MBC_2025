@@ -8,14 +8,15 @@ import ChatFooter from '../components/chat/ChatFooter';
 export default function Chat() {
   const [isSplit, setIsSplit] = useState(false);
   const [isChatMode, setIsChatMode] = useState(false);
+  const [isVoiceMode, setIsVoiceMode] = useState(false);
   const [hideHeaderFooter, setHideHeaderFooter] = useState(false);
   const headerRef = useRef<HTMLDivElement>(null);
   const footerRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
 
-  // Animate out header and footer when entering chat mode
+  // Animate out header and footer when entering chat or voice mode
   useLayoutEffect(() => {
-    if (isChatMode) {
+    if (isChatMode || isVoiceMode) {
       const tl = gsap.timeline({
         onComplete: () => setHideHeaderFooter(true)
       });
@@ -34,7 +35,7 @@ export default function Chat() {
         ease: "power2.in"
       }, 0);
     }
-  }, [isChatMode]);
+  }, [isChatMode, isVoiceMode]);
 
   return (
     <div className="relative w-full h-[calc(100vh-65px)] bg-surface-950 overflow-hidden text-white font-sans">
@@ -59,6 +60,8 @@ export default function Chat() {
                     onSplit={() => setIsSplit(true)} 
                     isChatMode={isChatMode}
                     onChatMode={() => setIsChatMode(true)}
+                    isVoiceMode={isVoiceMode}
+                    onVoiceMode={() => setIsVoiceMode(true)}
                 />
 
                 {!hideHeaderFooter && (

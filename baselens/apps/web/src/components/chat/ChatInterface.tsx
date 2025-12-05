@@ -10,20 +10,12 @@ import RequestSummary, { type SummaryCard } from './RequestSummary';
 // Register GSAP ScrollToPlugin
 gsap.registerPlugin(ScrollToPlugin);
 
-// Helper to scroll an element into view smoothly using GSAP, centered on screen
-const scrollToElement = (element: HTMLElement | null, scrollContainer: HTMLElement | null) => {
-    if (element && scrollContainer) {
-        const elementRect = element.getBoundingClientRect();
-        const containerRect = scrollContainer.getBoundingClientRect();
-        
-        // Calculate the scroll position to center the element
-        const elementCenter = element.offsetTop + elementRect.height / 2;
-        const containerVisibleHeight = containerRect.height;
-        const targetScroll = elementCenter - containerVisibleHeight / 2;
-        
+// Helper to scroll to bottom of a container smoothly using GSAP
+const scrollToBottom = (scrollContainer: HTMLElement | null) => {
+    if (scrollContainer) {
         gsap.to(scrollContainer, {
-            scrollTo: { y: Math.max(0, targetScroll) },
-            duration: 1.5,
+            scrollTo: { y: scrollContainer.scrollHeight },
+            duration: 0.8,
             ease: "power2.out"
         });
     }
@@ -53,10 +45,13 @@ const initialExecutionSteps: ExecutionStep[] = [
     { label: "Step 1: Swap ETH to USDC", status: 'pending' },
     { label: "Step 2: Lend USDC on Morpho", status: 'pending' },
     { label: "Step 3: Wait for transaction validation on blockchain", status: 'pending' },
+	{label: "step 4: mock step 4", status: 'pending'},
+	{label: "step 5: mock step 5", status: 'pending'},
+	{label: "step 6: mock step 6", status: 'pending'},
 ];
 
 // Mock wait times for each execution step (in ms)
-const executionStepDelays = [2000, 2500, 3000, 1500];
+const executionStepDelays = () => Math.floor(Math.random() * 1000) + 1000;
 
 // Mock summary data
 const mockSummaryCards: SummaryCard[] = [
@@ -79,20 +74,19 @@ const mockStepApiCall = async (stepIndex: number): Promise<string> => {
 
 // Mock OnchainKit call - Step 0 is special, frontend calls OnchainKit
 const mockOnchainKitCall = async (): Promise<boolean> => {
-    await new Promise(resolve => setTimeout(resolve, executionStepDelays[0]));
+    await new Promise(resolve => setTimeout(resolve, executionStepDelays()));
     // Simulate successful OnchainKit operation
     return true;
 };
 
 // Mock backend execution step call
 const mockExecutionStepCall = async (stepIndex: number): Promise<boolean> => {
-    await new Promise(resolve => setTimeout(resolve, executionStepDelays[stepIndex]));
+    await new Promise(resolve => setTimeout(resolve, executionStepDelays()));
     return true;
 };
 
 export default function ChatInterface({ isVisible }: ChatInterfaceProps) {
     const containerRef = useRef<HTMLDivElement>(null);
-    const loadingDotsRef = useRef<HTMLDivElement>(null);
     const stepsListRef = useRef<HTMLDivElement>(null);
     const executionListRef = useRef<HTMLDivElement>(null);
     const summaryRef = useRef<HTMLDivElement>(null);
@@ -110,6 +104,11 @@ export default function ChatInterface({ isVisible }: ChatInterfaceProps) {
     
     // Summary state
     const [showSummary, setShowSummary] = useState(false);
+    
+    // Track which sections have been scrolled to (only scroll once per section)
+    const hasScrolledToSteps = useRef(false);
+    const hasScrolledToExecution = useRef(false);
+    const hasScrolledToSummary = useRef(false);
 
     // Find the scrollable parent container
     const getScrollContainer = (): HTMLElement | null => {
@@ -124,31 +123,27 @@ export default function ChatInterface({ isVisible }: ChatInterfaceProps) {
         return null;
     };
 
-    // Auto-scroll when loading dots appear
+    // Scroll to bottom when steps appear (only once)
     useEffect(() => {
-        if (isLoading) {
-            scrollToElement(loadingDotsRef.current, getScrollContainer());
-        }
-    }, [isLoading]);
-
-    // Auto-scroll when steps list appears or updates
-    useEffect(() => {
-        if (showSteps && steps.length > 0) {
-            scrollToElement(stepsListRef.current, getScrollContainer());
+        if (showSteps && steps.length > 0 && !hasScrolledToSteps.current) {
+            hasScrolledToSteps.current = true;
+            scrollToBottom(getScrollContainer());
         }
     }, [showSteps, steps]);
 
-    // Auto-scroll when execution list appears or updates
+    // Scroll to bottom when execution appears (only once)
     useEffect(() => {
-        if (showExecution && executionSteps.length > 0) {
-            scrollToElement(executionListRef.current, getScrollContainer());
+        if (showExecution && executionSteps.length > 0 && !hasScrolledToExecution.current) {
+            hasScrolledToExecution.current = true;
+            scrollToBottom(getScrollContainer());
         }
-    }, [showExecution, executionSteps, currentExecutionStep]);
+    }, [showExecution, executionSteps]);
 
-    // Auto-scroll when summary appears
+    // Scroll to bottom when summary appears (only once)
     useEffect(() => {
-        if (showSummary) {
-            scrollToElement(summaryRef.current, getScrollContainer());
+        if (showSummary && !hasScrolledToSummary.current) {
+            hasScrolledToSummary.current = true;
+            scrollToBottom(getScrollContainer());
         }
     }, [showSummary]);
 
@@ -269,7 +264,7 @@ export default function ChatInterface({ isVisible }: ChatInterfaceProps) {
             </div>
 
             {/* Loading Dots - outside the container */}
-            <div ref={loadingDotsRef}>
+            <div>
                 <LoadingDots isVisible={isLoading} />
             </div>
 

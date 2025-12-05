@@ -17,7 +17,7 @@ export default function Layout() {
     <div className="min-h-screen flex flex-col">
       {/* Header */}
       <header className="sticky top-0 z-50 border-b border-surface-800 bg-surface-950/80 backdrop-blur-lg">
-        <div className="container mx-auto px-4 h-16 flex items-center justify-between">
+        <div className="w-full max-w-[1920px] mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
           {/* Logo */}
           <Link to="/" className="flex items-center gap-3 group">
             <div className="relative">
@@ -44,10 +44,10 @@ export default function Layout() {
               Chat
             </Link>
             <Link
-              to="/"
+              to="/analyze"
               className={cn(
                 "flex items-center gap-2 text-sm font-medium transition-colors",
-                location.pathname === "/"
+                location.pathname === "/analyze"
                   ? "text-primary-400"
                   : "text-surface-400 hover:text-surface-100"
               )}
@@ -120,7 +120,7 @@ export default function Layout() {
                     console.error("Login failed:", error);
                   }
                 }}
-                className="btn btn-primary btn-sm flex items-center gap-2"
+                className="btn btn-primary btn-sm flex items-center gap-2 whitespace-nowrap"
               >
                 <LogIn className="w-4 h-4" />
                 Sign In

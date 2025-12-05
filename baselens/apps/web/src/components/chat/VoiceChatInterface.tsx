@@ -6,21 +6,31 @@ import { useVoiceRecorder } from '../../hooks/useVoiceRecorder';
 interface VoiceChatInterfaceProps {
   isVisible: boolean;
   onTranscription?: (text: string) => void;
+  onSubmit?: (text: string) => void;
+  autoSubmit?: boolean; // Automatically submit after transcription
+  isProcessing?: boolean; // External processing state (after submit)
 }
 
-export default function VoiceChatInterface({ isVisible, onTranscription }: VoiceChatInterfaceProps) {
+export default function VoiceChatInterface({ 
+  isVisible, 
+  onTranscription, 
+  onSubmit,
+  autoSubmit = false,
+  isProcessing: externalProcessing = false,
+}: VoiceChatInterfaceProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const transcriptionRef = useRef<HTMLDivElement>(null);
+  const hasSubmittedRef = useRef<boolean>(false);
 
   const {
     isRecording,
-    isProcessing,
+    isProcessing: isTranscribing,
     transcribedText,
     error,
     audioLevel,
     startRecording,
     stopRecording,
-    reset,
+    reset: resetRecorder,
   } = useVoiceRecorder({
     onTranscription: (text) => {
       onTranscription?.(text);
@@ -33,6 +43,27 @@ export default function VoiceChatInterface({ isVisible, onTranscription }: Voice
     autoStopOnSilence: true,
     noiseGateBuffer: 20, // Speech must be 20 points above ambient noise
   });
+
+  // Combined processing state
+  const isProcessing = isTranscribing || externalProcessing;
+
+  // Reset submitted flag when recorder is reset
+  const reset = () => {
+    hasSubmittedRef.current = false;
+    resetRecorder();
+  };
+
+  // Auto-submit after transcription is complete
+  useEffect(() => {
+    if (autoSubmit && transcribedText && !hasSubmittedRef.current && !isTranscribing) {
+      hasSubmittedRef.current = true;
+      // Small delay to show the transcribed text before submitting
+      const timer = setTimeout(() => {
+        onSubmit?.(transcribedText);
+      }, 800);
+      return () => clearTimeout(timer);
+    }
+  }, [autoSubmit, transcribedText, isTranscribing, onSubmit]);
 
   // Animate transcription appearance
   useEffect(() => {
@@ -73,8 +104,12 @@ export default function VoiceChatInterface({ isVisible, onTranscription }: Voice
           <p className="text-surface-400 text-sm">
             {isRecording
               ? 'Listening... Will auto-stop when you pause speaking'
-              : isProcessing
+              : isTranscribing
               ? 'Processing your voice...'
+              : externalProcessing
+              ? 'Processing your request...'
+              : transcribedText && autoSubmit
+              ? 'Starting your request...'
               : 'Click the microphone to start speaking'}
           </p>
         </div>
@@ -111,7 +146,7 @@ export default function VoiceChatInterface({ isVisible, onTranscription }: Voice
         )}
 
         {/* Processing indicator */}
-        {isProcessing && (
+        {isTranscribing && (
           <div className="flex items-center gap-2 text-primary-400">
             <svg
               className="animate-spin w-5 h-5"
@@ -138,9 +173,9 @@ export default function VoiceChatInterface({ isVisible, onTranscription }: Voice
         )}
 
         {/* Transcription result */}
-        {transcribedText && !isRecording && !isProcessing && (
+        {transcribedText && !isRecording && !isTranscribing && (
           <div ref={transcriptionRef} className="w-full">
-            <div className="bg-white/5 border border-white/10 rounded-xl p-4">
+            <div className={`bg-white/5 border border-white/10 rounded-xl p-4 ${externalProcessing ? 'opacity-60' : ''}`}>
               <div className="flex items-start gap-3">
                 <div className="w-8 h-8 rounded-full bg-primary-500/20 flex items-center justify-center flex-shrink-0">
                   <svg
@@ -165,15 +200,25 @@ export default function VoiceChatInterface({ isVisible, onTranscription }: Voice
               </div>
             </div>
             
-            {/* Action buttons after transcription */}
-            <div className="flex justify-center gap-3 mt-4">
-              <button
-                onClick={reset}
-                className="px-4 py-2 text-sm text-surface-300 hover:text-white border border-white/10 hover:border-white/20 rounded-lg transition-colors"
-              >
-                Record again
-              </button>
-            </div>
+            {/* Action buttons after transcription - only show if not auto-submitting or not processing */}
+            {!autoSubmit && !externalProcessing && (
+              <div className="flex justify-center gap-3 mt-4">
+                <button
+                  onClick={reset}
+                  className="px-4 py-2 text-sm text-surface-300 hover:text-white border border-white/10 hover:border-white/20 rounded-lg transition-colors"
+                >
+                  Record again
+                </button>
+                {onSubmit && (
+                  <button
+                    onClick={() => onSubmit(transcribedText)}
+                    className="px-4 py-2 text-sm text-white bg-primary-500 hover:bg-primary-400 rounded-lg transition-colors"
+                  >
+                    Submit
+                  </button>
+                )}
+              </div>
+            )}
           </div>
         )}
 
@@ -207,7 +252,7 @@ export default function VoiceChatInterface({ isVisible, onTranscription }: Voice
         )}
 
         {/* Initial state - instructions */}
-        {!transcribedText && !error && !isRecording && !isProcessing && (
+        {!transcribedText && !error && !isRecording && !isProcessing && !externalProcessing && (
           <div className="text-center text-surface-400 text-sm">
             <p>Press the microphone button below to start speaking.</p>
             <p className="mt-1 text-surface-500 text-xs">
@@ -224,7 +269,7 @@ export default function VoiceChatInterface({ isVisible, onTranscription }: Voice
           isProcessing={isProcessing}
           onStartRecording={startRecording}
           onStopRecording={stopRecording}
-          disabled={isProcessing}
+          disabled={isProcessing || externalProcessing}
         />
       </div>
     </div>

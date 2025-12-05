@@ -10,20 +10,12 @@ import RequestSummary, { type SummaryCard } from './RequestSummary';
 // Register GSAP ScrollToPlugin
 gsap.registerPlugin(ScrollToPlugin);
 
-// Helper to scroll an element into view smoothly using GSAP, centered on screen
-const scrollToElement = (element: HTMLElement | null, scrollContainer: HTMLElement | null) => {
-    if (element && scrollContainer) {
-        const elementRect = element.getBoundingClientRect();
-        const containerRect = scrollContainer.getBoundingClientRect();
-        
-        // Calculate the scroll position to center the element
-        const elementCenter = element.offsetTop + elementRect.height / 2;
-        const containerVisibleHeight = containerRect.height;
-        const targetScroll = elementCenter - containerVisibleHeight / 2;
-        
+// Helper to scroll to bottom of a container smoothly using GSAP
+const scrollToBottom = (scrollContainer: HTMLElement | null) => {
+    if (scrollContainer) {
         gsap.to(scrollContainer, {
-            scrollTo: { y: Math.max(0, targetScroll) },
-            duration: 1.5,
+            scrollTo: { y: scrollContainer.scrollHeight },
+            duration: 0.8,
             ease: "power2.out"
         });
     }
@@ -95,7 +87,6 @@ const mockExecutionStepCall = async (stepIndex: number): Promise<boolean> => {
 
 export default function ChatInterface({ isVisible }: ChatInterfaceProps) {
     const containerRef = useRef<HTMLDivElement>(null);
-    const loadingDotsRef = useRef<HTMLDivElement>(null);
     const stepsListRef = useRef<HTMLDivElement>(null);
     const executionListRef = useRef<HTMLDivElement>(null);
     const summaryRef = useRef<HTMLDivElement>(null);
@@ -114,8 +105,10 @@ export default function ChatInterface({ isVisible }: ChatInterfaceProps) {
     // Summary state
     const [showSummary, setShowSummary] = useState(false);
     
-    // Track which elements have already been scrolled to (only scroll once per element)
-    const hasScrolledTo = useRef<Set<string>>(new Set());
+    // Track which sections have been scrolled to (only scroll once per section)
+    const hasScrolledToSteps = useRef(false);
+    const hasScrolledToExecution = useRef(false);
+    const hasScrolledToSummary = useRef(false);
 
     // Find the scrollable parent container
     const getScrollContainer = (): HTMLElement | null => {
@@ -130,38 +123,27 @@ export default function ChatInterface({ isVisible }: ChatInterfaceProps) {
         return null;
     };
 
-    // Auto-scroll when loading dots appear (only once)
+    // Scroll to bottom when steps appear (only once)
     useEffect(() => {
-        if (isLoading && !hasScrolledTo.current.has('loading')) {
-            hasScrolledTo.current.add('loading');
-            scrollToElement(loadingDotsRef.current, getScrollContainer());
-        }
-        if (!isLoading) {
-            hasScrolledTo.current.delete('loading');
-        }
-    }, [isLoading]);
-
-    // Auto-scroll when steps list appears (only once)
-    useEffect(() => {
-        if (showSteps && steps.length > 0 && !hasScrolledTo.current.has('steps')) {
-            hasScrolledTo.current.add('steps');
-            scrollToElement(stepsListRef.current, getScrollContainer());
+        if (showSteps && steps.length > 0 && !hasScrolledToSteps.current) {
+            hasScrolledToSteps.current = true;
+            scrollToBottom(getScrollContainer());
         }
     }, [showSteps, steps]);
 
-    // Auto-scroll when execution list appears (only once)
+    // Scroll to bottom when execution appears (only once)
     useEffect(() => {
-        if (showExecution && executionSteps.length > 0 && !hasScrolledTo.current.has('execution')) {
-            hasScrolledTo.current.add('execution');
-            scrollToElement(executionListRef.current, getScrollContainer());
+        if (showExecution && executionSteps.length > 0 && !hasScrolledToExecution.current) {
+            hasScrolledToExecution.current = true;
+            scrollToBottom(getScrollContainer());
         }
     }, [showExecution, executionSteps]);
 
-    // Auto-scroll when summary appears (only once)
+    // Scroll to bottom when summary appears (only once)
     useEffect(() => {
-        if (showSummary && !hasScrolledTo.current.has('summary')) {
-            hasScrolledTo.current.add('summary');
-            scrollToElement(summaryRef.current, getScrollContainer());
+        if (showSummary && !hasScrolledToSummary.current) {
+            hasScrolledToSummary.current = true;
+            scrollToBottom(getScrollContainer());
         }
     }, [showSummary]);
 
@@ -282,7 +264,7 @@ export default function ChatInterface({ isVisible }: ChatInterfaceProps) {
             </div>
 
             {/* Loading Dots - outside the container */}
-            <div ref={loadingDotsRef}>
+            <div>
                 <LoadingDots isVisible={isLoading} />
             </div>
 

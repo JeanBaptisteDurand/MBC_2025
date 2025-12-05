@@ -96,6 +96,7 @@ export default function ChatInterfaceAgent({ isVisible }: ChatInterfaceProps) {
     const [executionId, setExecutionId] = useState<string | null>(null);
     const [executionPollInterval, setExecutionPollInterval] = useState<NodeJS.Timeout | null>(null);
     const errorAlertShownRef = useRef<Set<string>>(new Set()); // Track which executions have shown errors
+    const [executionError, setExecutionError] = useState<{ hasError: boolean; errorMessage?: string; transactionHistory?: SummaryCard[] }>({ hasError: false });
 
     // Summary state
     const [showSummary, setShowSummary] = useState(false);
@@ -341,6 +342,7 @@ export default function ChatInterfaceAgent({ isVisible }: ChatInterfaceProps) {
 
                     setSummaryCards(txCards);
                     setShowSummary(true);
+                    setExecutionError({ hasError: false });
                 } else if (hasErrors) {
                     // Check if rollback was attempted
                     const rollbackStep = state.steps.find((s) => s.stepId === 999);
@@ -352,23 +354,45 @@ export default function ChatInterfaceAgent({ isVisible }: ChatInterfaceProps) {
                         return;
                     }
 
-                    // Show error message only once per execution
+                    // Build transaction history for transfer transactions (step 0 and step 999)
+                    const transferSteps = state.steps.filter((s) => 
+                        (s.stepId === 0 || s.stepId === 999) && s.txHash
+                    );
+                    const txHistory: SummaryCard[] = transferSteps.map((s) => {
+                        const step = state.plan.steps.find((step: any) => step.stepId === s.stepId);
+                        let title = '';
+                        if (s.stepId === 0) {
+                            title = 'Funding Transaction';
+                        } else if (s.stepId === 999) {
+                            title = 'Refund Transaction';
+                        } else {
+                            title = `Transaction ${s.stepId}`;
+                        }
+                        return {
+                            title,
+                            link: `${BASESCAN_URL}/tx/${s.txHash}`,
+                            imageUrl: '/logo/basescan-light.svg',
+                        };
+                    });
+
+                    // Set error state for UI
+                    let errorMessage = state.error || 'Execution failed.';
+                    if (fundsReturned) {
+                        errorMessage += ' Your funds have been returned.';
+                    } else if (rollbackStep?.status === 'error') {
+                        errorMessage += ' Failed to return funds automatically. Please contact support.';
+                    }
+
+                    setExecutionError({
+                        hasError: true,
+                        errorMessage,
+                        transactionHistory: txHistory.length > 0 ? txHistory : undefined,
+                    });
+
+                    // Show error message only once per execution (but don't use alert anymore)
                     if (!errorAlertShownRef.current.has(execId)) {
                         errorAlertShownRef.current.add(execId);
-
                         console.error('[ChatInterface] Execution failed:', state.error);
-
-                        let errorMessage = state.error || 'Execution failed.';
-                        if (fundsReturned) {
-                            errorMessage += '\n\n✅ User funds have been returned.';
-                        } else if (rollbackStep?.status === 'error') {
-                            errorMessage += '\n\n⚠️ Failed to return funds automatically. Please contact support.';
-                        } else {
-                            errorMessage += '\n\nUser funds will be returned automatically.';
-                        }
-
-                        // Show alert with error details (only once)
-                        alert(errorMessage);
                     }
                 }
             }
@@ -420,6 +444,7 @@ export default function ChatInterfaceAgent({ isVisible }: ChatInterfaceProps) {
         setShowSteps(false);
         setShowExecution(false);
         setShowSummary(false);
+        setExecutionError({ hasError: false });
 
         try {
             // Step 1: Generate plan
@@ -585,6 +610,9 @@ export default function ChatInterfaceAgent({ isVisible }: ChatInterfaceProps) {
                     steps={executionSteps}
                     isVisible={showExecution}
                     currentStepIndex={currentExecutionStep}
+                    hasError={executionError.hasError}
+                    errorMessage={executionError.errorMessage}
+                    transactionHistory={executionError.transactionHistory}
                 />
             </div>
 

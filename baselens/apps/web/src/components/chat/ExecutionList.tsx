@@ -1,4 +1,6 @@
 import { Check } from 'lucide-react';
+import FailureAnimation from './FailureAnimation';
+import { SummaryCard } from './RequestSummary';
 
 export type ExecutionStepStatus = 'pending' | 'running' | 'completed';
 
@@ -11,6 +13,9 @@ interface ExecutionListProps {
     steps: ExecutionStep[];
     isVisible: boolean;
     currentStepIndex: number;
+    hasError?: boolean;
+    errorMessage?: string;
+    transactionHistory?: SummaryCard[];
 }
 
 function ProgressStepIndicator({ status, stepNumber }: { status: ExecutionStepStatus; stepNumber: number }) {
@@ -38,8 +43,25 @@ function ProgressStepIndicator({ status, stepNumber }: { status: ExecutionStepSt
     );
 }
 
-export default function ExecutionList({ steps, isVisible, currentStepIndex }: ExecutionListProps) {
+export default function ExecutionList({ 
+    steps, 
+    isVisible, 
+    currentStepIndex,
+    hasError = false,
+    errorMessage,
+    transactionHistory
+}: ExecutionListProps) {
     if (!isVisible || steps.length === 0) return null;
+
+    // Show failure animation if there's an error
+    if (hasError) {
+        return (
+            <FailureAnimation 
+                errorMessage={errorMessage}
+                transactionHistory={transactionHistory}
+            />
+        );
+    }
 
     const completedCount = steps.filter(s => s.status === 'completed').length;
     const progressPercentage = (completedCount / steps.length) * 100;

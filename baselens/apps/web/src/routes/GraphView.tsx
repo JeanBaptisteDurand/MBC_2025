@@ -728,7 +728,7 @@ export default function GraphView() {
 
   if (isLoading) {
     return (
-      <div className="h-[calc(100vh-8rem)] flex items-center justify-center">
+      <div className="h-[calc(100vh-4rem)] flex items-center justify-center">
         <div className="text-center">
           <Loader className="w-12 h-12 animate-spin text-primary-500 mx-auto mb-4" />
           <p className="text-surface-400">Loading graph data...</p>
@@ -739,7 +739,7 @@ export default function GraphView() {
 
   if (error) {
     return (
-      <div className="h-[calc(100vh-8rem)] flex items-center justify-center">
+      <div className="h-[calc(100vh-4rem)] flex items-center justify-center">
         <div className="text-center">
           <AlertCircle className="w-12 h-12 text-red-500 mx-auto mb-4" />
           <p className="text-surface-400">Failed to load graph data</p>
@@ -749,7 +749,7 @@ export default function GraphView() {
   }
 
   return (
-    <div className="h-[calc(100vh-8rem)] relative">
+    <div className="h-[calc(100vh-4rem)] relative">
       {/* React Flow Canvas */}
       <ReactFlow
         nodes={nodes}

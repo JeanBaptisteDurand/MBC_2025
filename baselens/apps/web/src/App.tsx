@@ -7,6 +7,7 @@ import Chat from "./routes/Chat";
 import Analyze from "./routes/Analyze";
 import Profile from "./routes/Profile";
 import Mbc from "./routes/Mbc";
+import Team from "./routes/Team";
 
 function App() {
   return (
@@ -21,6 +22,7 @@ function App() {
 		<Route path="chat" element={<Chat />} />
         <Route path="history" element={<History />} />
         <Route path="profile" element={<Profile />} />
+        <Route path="team" element={<Team />} />
       </Route>
     </Routes>
   );

@@ -103,7 +103,7 @@ export default function VoiceChatInterface({
           <h3 className="text-lg font-medium text-white mb-1">Voice Interaction</h3>
           <p className="text-surface-400 text-sm">
             {isRecording
-              ? 'Listening... Will auto-stop when you pause speaking'
+              ? 'Listening... Stop the recording when done.'
               : isTranscribing
               ? 'Processing your voice...'
               : externalProcessing

@@ -75,8 +75,8 @@ services:
     depends_on:
       - server
     environment:
-      # Use relative path for API URL - Caddy will proxy /api/* to server
-      VITE_API_URL: ""
+      # Use production HTTPS URL from .env file
+      VITE_API_URL: ${VITE_API_URL:-https://baselens.tech}
       VITE_PUBLIC_ONCHAINKIT_API_KEY: ${VITE_PUBLIC_ONCHAINKIT_API_KEY:-}
       VITE_ZERODEV_PROJECT_ID: ${VITE_ZERODEV_PROJECT_ID:-}
       VITE_ZERODEV_BUNDLER_URL: ${VITE_ZERODEV_BUNDLER_URL:-}

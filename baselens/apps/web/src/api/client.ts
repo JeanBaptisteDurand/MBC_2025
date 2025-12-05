@@ -2,7 +2,7 @@
 // API Client
 // ============================================
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:3001";
+const API_BASE_URL = import.meta.env.VITE_API_URL || "";
 const TOKEN_STORAGE_KEY = "baselens_auth_token";
 
 interface FetchOptions extends RequestInit {

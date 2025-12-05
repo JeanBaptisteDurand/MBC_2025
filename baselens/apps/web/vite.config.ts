@@ -12,9 +12,12 @@ export default defineConfig({
   server: {
     port: 3000,
     host: true,
+    allowedHosts: [
+      "baselens.tech",
+      ".baselens.tech", // Allow subdomains too
+    ],
   },
   preview: {
     port: 3000,
   },
 });
-

@@ -9,8 +9,7 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-baselens}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-baselens}
       POSTGRES_DB: ${POSTGRES_DB:-baselens}
-    ports:
-      - "5432:5432"
+    # No ports exposed - only accessible internally via Docker network
     volumes:
       - postgres_data:/var/lib/postgresql/data
       # Init script to enable pgvector extension
@@ -25,8 +24,7 @@ services:
     image: redis:7-alpine
     container_name: baselens-redis
     restart: unless-stopped
-    ports:
-      - "6379:6379"
+    # No ports exposed - only accessible internally via Docker network
     volumes:
       - redis_data:/data
     healthcheck:
@@ -61,8 +59,7 @@ services:
       SERVER_PAY_TO_ADDRESS: ${SERVER_PAY_TO_ADDRESS:-0x7d85bf7a82470837a1d832e4fa503a7ebf20ca97}
       X402_FACILITATOR_URL: ${X402_FACILITATOR_URL:-https://x402.org/facilitator}
       JWT_SECRET: ${JWT_SECRET}
-    ports:
-      - "3001:3001"
+    # Ports removed - accessed through Caddy internally
     volumes:
       # Hot reload: mount source code for development
       - ./apps/server/src:/app/apps/server/src
@@ -78,13 +75,13 @@ services:
     depends_on:
       - server
     environment:
-      VITE_API_URL: http://localhost:3001
+      # Use relative path for API URL - Caddy will proxy /api/* to server
+      VITE_API_URL: ""
       VITE_PUBLIC_ONCHAINKIT_API_KEY: ${VITE_PUBLIC_ONCHAINKIT_API_KEY:-}
       VITE_ZERODEV_PROJECT_ID: ${VITE_ZERODEV_PROJECT_ID:-}
       VITE_ZERODEV_BUNDLER_URL: ${VITE_ZERODEV_BUNDLER_URL:-}
       VITE_ZERODEV_PAYMASTER_URL: ${VITE_ZERODEV_PAYMASTER_URL:-}
-    ports:
-      - "3000:3000"
+    # Ports removed - accessed through Caddy internally
     volumes:
       # Hot reload: mount source code for development
       - ./apps/web/src:/app/apps/web/src
@@ -92,6 +89,24 @@ services:
       - ./apps/web/public:/app/apps/web/public
       - ./packages/core/src:/app/packages/core/src
 
+  caddy:
+    image: caddy:2-alpine
+    container_name: baselens-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - web
+      - server
+
 volumes:
   postgres_data:
   redis_data:
+  caddy_data:
+  caddy_config:

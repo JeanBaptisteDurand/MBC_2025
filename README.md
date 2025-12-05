@@ -93,7 +93,7 @@ On Base, reading and understanding complex smart-contract systems (proxies, fact
 - **Track:** Base Main Track  
 - **Network:** Base Mainnet & Base Sepolia  
 - **Repository:** https://github.dev/JeanBaptisteDurand/MBC_2025  
-- **Demo Video (3–5 min):** *<insert YouTube / Google Drive link>*  
+- **Demo Video (3–5 min):** https://youtu.be/Jk9Rvzt322w
 
 ### 🔗 Deployed Contracts
 | Address | Description |

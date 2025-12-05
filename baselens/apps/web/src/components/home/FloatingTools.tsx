@@ -1,4 +1,4 @@
-import { useRef, useLayoutEffect } from 'react';
+import { useRef, useLayoutEffect, useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Search, MessageCircle, Code, BookOpen, Wallet, LucideIcon } from 'lucide-react';
 import gsap from 'gsap';
@@ -12,6 +12,7 @@ interface Tool {
   position: { x: number; y: number };
   available: boolean;
   route?: string;
+  expandDirection?: 'left' | 'right'; // Direction to expand on hover
 }
 
 const tools: Tool[] = [
@@ -24,6 +25,7 @@ const tools: Tool[] = [
     position: { x: -280, y: -120 },
     available: true,
     route: '/analyze',
+    expandDirection: 'right',
   },
   {
     id: 'clarify',
@@ -34,6 +36,7 @@ const tools: Tool[] = [
     position: { x: 280, y: -120 },
     available: true,
     route: '/chat',
+    expandDirection: 'left',
   },
   {
     id: 'api',
@@ -43,6 +46,7 @@ const tools: Tool[] = [
     color: '#34d399',
     position: { x: -320, y: 20 },
     available: false,
+    expandDirection: 'right',
   },
   {
     id: 'learn',
@@ -52,6 +56,7 @@ const tools: Tool[] = [
     color: '#fbbf24',
     position: { x: 0, y: 70 },
     available: false,
+    expandDirection: 'right',
   },
   {
     id: 'portfolio',
@@ -61,6 +66,7 @@ const tools: Tool[] = [
     color: '#f472b6',
     position: { x: 320, y: 20 },
     available: false,
+    expandDirection: 'left',
   },
 ];
 
@@ -68,9 +74,10 @@ interface FloatingToolProps {
   tool: Tool;
   index: number;
   animationPaused?: boolean;
+  positionScale: number;
 }
 
-function FloatingTool({ tool, index, animationPaused }: FloatingToolProps) {
+function FloatingTool({ tool, index, animationPaused, positionScale }: FloatingToolProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const floatAnimation = useRef<gsap.core.Tween | null>(null);
@@ -82,6 +89,12 @@ function FloatingTool({ tool, index, animationPaused }: FloatingToolProps) {
   // Calculate expanded height based on description length (shorter descriptions need less height)
   const isShortDescription = tool.description.length < 55;
   const EXPANDED_HEIGHT = isShortDescription ? 85 : 120;
+  
+  // Apply scale to position
+  const scaledPosition = {
+    x: tool.position.x * positionScale,
+    y: tool.position.y * positionScale,
+  };
 
   // Initial floating animation
   useLayoutEffect(() => {
@@ -93,12 +106,12 @@ function FloatingTool({ tool, index, animationPaused }: FloatingToolProps) {
       { 
         opacity: 0, 
         scale: 0,
-        y: tool.position.y + 50 
+        y: scaledPosition.y + 50 
       },
       { 
         opacity: 1, 
         scale: 1,
-        y: tool.position.y,
+        y: scaledPosition.y,
         duration: 0.8,
         delay: 0.2 + index * 0.1,
         ease: 'back.out(1.7)'
@@ -107,7 +120,7 @@ function FloatingTool({ tool, index, animationPaused }: FloatingToolProps) {
 
     // Continuous floating animation
     floatAnimation.current = gsap.to(containerRef.current, {
-      y: tool.position.y + Math.sin(index) * 4,
+      y: scaledPosition.y + Math.sin(index) * 4,
       duration: 2 + index * 0.3,
       repeat: -1,
       yoyo: true,
@@ -118,7 +131,7 @@ function FloatingTool({ tool, index, animationPaused }: FloatingToolProps) {
       floatAnimation.current?.kill();
       expandTimeline.current?.kill();
     };
-  }, [index, tool.position.y]);
+  }, [index, scaledPosition.y]);
 
   // Pause/resume animation and auto-expand/collapse based on animationPaused prop
   useLayoutEffect(() => {
@@ -258,8 +271,8 @@ function FloatingTool({ tool, index, animationPaused }: FloatingToolProps) {
     <div
       className="absolute"
       style={{
-        left: `calc(50% + ${tool.position.x}px)`,
-        top: `calc(50% + ${tool.position.y}px)`,
+        left: `calc(50% + ${scaledPosition.x}px)`,
+        top: `calc(50% + ${scaledPosition.y}px)`,
         transform: 'translate(-50%, -50%)',
       }}
     >
@@ -281,7 +294,7 @@ function FloatingTool({ tool, index, animationPaused }: FloatingToolProps) {
           boxShadow: `0 0 20px ${tool.color}20`,
         }}
       >
-        {/* Icon - always visible, moves to top-left when expanded */}
+        {/* Icon - always visible on the left */}
         <div 
           className="absolute top-0 left-0 w-16 h-16 flex items-center justify-center flex-shrink-0"
         >
@@ -321,12 +334,33 @@ interface FloatingToolsProps {
 }
 
 export default function FloatingTools({ animationPaused }: FloatingToolsProps) {
+  const [positionScale, setPositionScale] = useState(1);
+  
+  useEffect(() => {
+    const calculateScale = () => {
+      const width = window.innerWidth;
+      // Full scale above 1100px, then scale down proportionally
+      // At 600px width, scale to ~0.5
+      if (width >= 1100) {
+        setPositionScale(1);
+      } else {
+        // Linear interpolation from 1100px (scale 1) to 500px (scale 0.4)
+        const scale = Math.max(0.4, 0.4 + (width - 500) * (0.6 / 600));
+        setPositionScale(scale);
+      }
+    };
+    
+    calculateScale();
+    window.addEventListener('resize', calculateScale);
+    return () => window.removeEventListener('resize', calculateScale);
+  }, []);
+  
   return (
     <div className="absolute inset-0 pointer-events-none">
       <div className="relative w-full h-full">
         {tools.map((tool, index) => (
           <div key={tool.id} className="pointer-events-auto">
-            <FloatingTool tool={tool} index={index} animationPaused={animationPaused} />
+            <FloatingTool tool={tool} index={index} animationPaused={animationPaused} positionScale={positionScale} />
           </div>
         ))}
       </div>

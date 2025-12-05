@@ -1,5 +1,5 @@
 import { Outlet, Link, useLocation } from "react-router-dom";
-import { Activity, History, Sun, Moon, Hexagon, BotMessageSquare, User, LogIn } from "lucide-react";
+import { Activity, History, Sun, Moon, Hexagon, BotMessageSquare, User, LogIn, Users } from "lucide-react";
 import { ConnectWallet, Wallet, WalletDropdown, WalletDropdownDisconnect } from "@coinbase/onchainkit/wallet";
 import { Address, Avatar, Name, Identity } from "@coinbase/onchainkit/identity";
 import { useAccount } from "wagmi";
@@ -79,6 +79,18 @@ export default function Layout() {
               <User className="w-4 h-4" />
               Profile
             </Link>
+            <Link
+              to="/team"
+              className={cn(
+                "flex items-center gap-2 text-sm font-medium transition-colors",
+                location.pathname === "/team"
+                  ? "text-primary-400"
+                  : "text-surface-400 hover:text-surface-100"
+              )}
+            >
+              <Users className="w-4 h-4" />
+              Team
+            </Link>
 
             {/* Theme Toggle */}
             <button
@@ -97,13 +109,13 @@ export default function Layout() {
             <Wallet>
               <ConnectWallet>
                 <Avatar className="h-6 w-6" />
-                <Name />
+                {/* <Name /> */}
                 <Address />
               </ConnectWallet>
               <WalletDropdown>
                 <Identity className="px-4 pt-3 pb-2" hasCopyAddressOnClick>
                   <Avatar />
-                  <Name />
+                  {/* <Name /> */}
                   <Address />
                 </Identity>
                 <WalletDropdownDisconnect />

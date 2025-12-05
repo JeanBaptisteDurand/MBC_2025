@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Outlet, Link, useLocation } from "react-router-dom";
-import { Activity, History, Sun, Moon, Hexagon, BotMessageSquare, User, LogIn, Users, Menu, X } from "lucide-react";
+import { Activity, History, Sun, Moon, Hexagon, BotMessageSquare, User, LogIn, Users, Menu, X, Presentation } from "lucide-react";
 import { ConnectWallet, Wallet, WalletDropdown, WalletDropdownDisconnect } from "@coinbase/onchainkit/wallet";
 import { Address, Avatar, Name, Identity } from "@coinbase/onchainkit/identity";
 import { useAccount } from "wagmi";
@@ -21,6 +21,7 @@ export default function Layout() {
     { to: "/history", label: "History", icon: History },
     { to: "/profile", label: "Profile", icon: User },
     { to: "/team", label: "Team", icon: Users },
+    { to: "/mbc", label: "MBC", icon: Presentation },
   ];
 
   return (
@@ -56,19 +57,6 @@ export default function Layout() {
                 {link.label}
               </Link>
             ))}
-
-            {/* Theme Toggle */}
-            <button
-              onClick={toggleTheme}
-              className="p-2 rounded-lg text-surface-400 hover:text-surface-100 hover:bg-surface-800 transition-colors"
-              aria-label="Toggle theme"
-            >
-              {theme === "dark" ? (
-                <Sun className="w-5 h-5" />
-              ) : (
-                <Moon className="w-5 h-5" />
-              )}
-            </button>
 
             {/* Wallet Connect */}
             <Wallet>

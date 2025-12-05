@@ -46,8 +46,7 @@ export default function HeroContent() {
         ref={titleRef}
         className="text-4xl md:text-5xl lg:text-6xl font-display font-bold mb-3 opacity-0"
       >
-        <span className="text-white">Base</span>
-        <span className="gradient-text">Lens</span>
+        <span className="gradient-text">BaseLens</span>
       </h1>
 
       {/* Animated tagline */}

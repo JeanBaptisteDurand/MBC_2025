@@ -4,9 +4,10 @@ import SlideEcosystem from "../components/presentation/SlideEcosystem";
 import SlideVision from "../components/presentation/SlideVision";
 import SlideBaseLens from "../components/presentation/SlideBaseLens";
 import SlideClarify from "../components/presentation/SlideClarify";
+import SlideAudience from "../components/presentation/SlideAudience";
 import SlideComingSoon from "../components/presentation/SlideComingSoon";
 
-const TOTAL_SLIDES = 5;
+const TOTAL_SLIDES = 6;
 
 export default function Mbc() {
   const [currentSlide, setCurrentSlide] = useState(0);
@@ -69,6 +70,8 @@ export default function Mbc() {
       case 3:
         return <SlideClarify />;
       case 4:
+        return <SlideAudience />;
+      case 5:
         return <SlideComingSoon onNavigate={handleNavigateToHome} />;
       default:
         return <SlideEcosystem />;
@@ -92,6 +95,7 @@ export default function Mbc() {
       <header className="relative z-50 flex justify-between items-center px-8 py-6">
         <div className="flex items-center gap-6">
           <img src="/logo.svg" alt="Logo" className="h-10" />
+          <span className="font-display text-2xl font-bold gradient-text">BaseLens</span>
           <img src="/MBCLogo.webp" alt="MBC Logo" className="h-10" />
         </div>
         <div className="text-xl font-semibold text-gray-300">

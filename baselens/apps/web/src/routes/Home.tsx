@@ -140,7 +140,7 @@ export default function Home() {
           
           {/* Scroll indicator */}
           <div 
-            className="absolute bottom-8 left-1/2 -translate-x-1/2 z-50 flex flex-col items-center gap-2 transition-opacity duration-300"
+            className="absolute bottom-8 right-8 z-50 flex flex-col items-center gap-2 transition-opacity duration-300"
             style={{ opacity: cameraAnimationComplete ? 1 : (1 - scrollProgress * 2) }}
           >
             <span className="text-surface-400 text-sm">Scroll to explore</span>

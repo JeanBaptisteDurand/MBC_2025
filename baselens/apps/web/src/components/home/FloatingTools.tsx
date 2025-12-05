@@ -79,7 +79,9 @@ function FloatingTool({ tool, index, animationPaused }: FloatingToolProps) {
 
   const COLLAPSED_SIZE = 64; // 16 * 4 = 64px (w-16)
   const EXPANDED_WIDTH = 280;
-  const EXPANDED_HEIGHT = 120;
+  // Calculate expanded height based on description length (shorter descriptions need less height)
+  const isShortDescription = tool.description.length < 55;
+  const EXPANDED_HEIGHT = isShortDescription ? 85 : 120;
 
   // Initial floating animation
   useLayoutEffect(() => {

@@ -16,6 +16,7 @@ import sourceRoutes from "./routes/source.js";
 import userRoutes from "./routes/users.js";
 import authRoutes from "./routes/auth.js";
 import agentRoutes from "./routes/agent.js";
+import speechRoutes from "./routes/speech.js";
 import { isPanoramixAvailable } from "./base/decompiler.js";
 import { initializeAgentWallet, getAgentWalletAddress, getAgentEthBalance } from "./agent/wallet.js";
 import { formatEther } from "viem";
@@ -47,6 +48,7 @@ app.use("/api/rag", ragRoutes);
 app.use("/api/chat-rag", chatRagRoutes);
 app.use("/api/source", sourceRoutes);
 app.use("/api/agent", agentRoutes); // Agent routes: /api/agent/plan, /api/agent/execute, etc.
+app.use("/api/speech", speechRoutes); // Speech routes: /api/speech/transcribe
 app.use("/api", userRoutes); // User routes: /api/users, /api/me, /api/me/smart-wallet/*
 
 // Error handling middleware

@@ -39,7 +39,7 @@ export default function ChatHeader({ isSplit }: ChatHeaderProps) {
     }, [isSplit]);
 
     return (
-        <h1 ref={textRef} className="text-4xl md:text-6xl font-thin tracking-tight text-center text-white/90 drop-shadow-2xl">
+        <h1 ref={textRef} className="text-4xl md:text-6xl font-thin tracking-tight text-center text-white/90 drop-shadow-2xl mx-4 md:mx-4">
             {!showInteractionTitle ? (
                 <>Hover the circle to meet <span className="font-normal text-white">Clarify</span></>
             ) : (

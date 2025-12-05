@@ -48,7 +48,7 @@ A built-in **On-Chain Agent** can receive natural-language instructions (for exa
 
 **AI & Data Layer:** OpenAI (chat + embeddings), PostgreSQL, pgvector, Redis, RAG system  
 
-**Payments & Monetization:** x402 protocol (USDC on Base), solidity smar3333333t contract
+**Payments & Monetization:** x402 protocol (USDC on Base), solidity smart contract
 
 **Infra & Runtime:** Docker, Docker Compose, Express, Prisma, BullMQ 
 

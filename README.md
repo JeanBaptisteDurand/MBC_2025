@@ -25,7 +25,7 @@ A built-in **On-Chain Agent** can receive natural-language instructions (for exa
 
 ## 🏗 Architecture Overview
 
-![BaseLens Architecture](./docs/arch.png)
+![BaseLens Architecture](./assets/technical_doc.png)
 
 **High-Level Flow**
 
